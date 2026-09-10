@@ -1,0 +1,29 @@
+{
+  "name": "expo-eyes-relay",
+  "version": "0.1.0",
+  "description": "Relay server for expo-eyes — bridges agent HTTP calls to phone WebSocket connections",
+  "main": "src/index.js",
+  "bin": {
+    "expo-eyes-relay": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js --verbose"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "ws": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "expo",
+    "react-native",
+    "agent",
+    "relay",
+    "automation",
+    "testing"
+  ],
+  "license": "MIT"
+}

@@ -31,10 +31,17 @@ function startWsServer() {
       }
     }, 5000);
 
-    ws.on('message', (raw) => {
+    // ws 8.x: 'message' callback is (data, isBinary). data is a Buffer when
+    // isBinary is true, or a Buffer containing UTF-8 when false.
+    // We always expect JSON text — convert and parse.
+    ws.on('message', (data, isBinary) => {
+      if (isBinary) {
+        console.warn(`[ws] received binary message from ${ip}, ignoring`);
+        return;
+      }
       let msg;
       try {
-        msg = JSON.parse(raw.toString());
+        msg = JSON.parse(data.toString());
       } catch (e) {
         console.warn(`[ws] received non-JSON message from ${ip}, ignoring`);
         return;

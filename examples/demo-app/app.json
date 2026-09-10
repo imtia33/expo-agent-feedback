@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "expo-eyes Demo",
+    "slug": "expo-eyes-demo",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "expoeyesdemo",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.expoeyes.demo"
+    },
+    "android": {
+      "package": "dev.expoeyes.demo"
+    },
+    "plugins": [],
+    "experiments": {
+      "tsconfigPaths": true
+    }
+  }
+}
