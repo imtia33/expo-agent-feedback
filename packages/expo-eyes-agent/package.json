@@ -1,0 +1,49 @@
+{
+  "name": "expo-eyes-agent",
+  "version": "0.1.0",
+  "description": "Agent SDK for expo-eyes — typed TypeScript client, MCP server, and CLI for the relay",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "expo-eyes-agent": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp-server.d.ts",
+      "import": "./dist/mcp-server.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "mcp": "node dist/cli.js mcp",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "expo",
+    "react-native",
+    "agent",
+    "mcp",
+    "model-context-protocol",
+    "testing",
+    "automation"
+  ],
+  "license": "MIT"
+}

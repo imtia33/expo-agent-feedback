@@ -31,14 +31,11 @@ coverage/
 # Tool results (ephemeral)
 tool-results/
 
-# Upload directory (your existing relay code, not for the repo)
+# Internal stuff (not part of project)
 upload/
-
-# Internal skill files (not part of this project)
 skills/
-
-# Research scratch (we keep docs/ but not research/)
 research/
-
-# Worklog (internal)
 worklog.md
+
+# Allow dist for the agent package (we ship it)
+!packages/expo-eyes-agent/dist/
