@@ -1,0 +1,30 @@
+{
+  "name": "expo-eyes-app",
+  "version": "0.1.0",
+  "description": "Eyes and fingers for AI agents on Expo apps — in-app SDK (pure JS, works in Expo Go)",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.76.0",
+    "expo": ">=50.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "expo",
+    "react-native",
+    "agent",
+    "testing",
+    "automation",
+    "accessibility",
+    "devtools"
+  ],
+  "license": "MIT"
+}
