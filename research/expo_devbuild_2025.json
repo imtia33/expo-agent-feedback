@@ -1,0 +1,29 @@
+[
+  {
+    "url": "https://docs.expo.dev",
+    "name": "Tutorial: Create a native module",
+    "snippet": "Jul 27, 2026 — A tutorial on creating a native module that persists settings with Expo Modules API. with a config plugin . In this tutorial, you build a module ...",
+    "host_name": "docs.expo.dev",
+    "rank": 0,
+    "date": "Jul 27, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://dev.to",
+    "name": "Expo SDK and native module",
+    "snippet": "Sep 16, 2022 — using config - plugins . if your native module needs some permissions, you need to write your own expo - config . Create template Templates let you ...",
+    "host_name": "dev.to",
+    "rank": 1,
+    "date": "Sep 16, 2022",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.sitepen.com",
+    "name": "Doing More with Expo: Using Custom Native Code",
+    "snippet": "Mar 24, 2022 — The first step is to create a config plugin that can make any required changes to the native code. This will allow the app to be built and ... Read more",
+    "host_name": "www.sitepen.com",
+    "rank": 2,
+    "date": "Mar 24, 2022",
+    "favicon": ""
+  }
+]

@@ -1,0 +1,56 @@
+[
+  {
+    "url": "https://stackoverflow.com/questions/65225214/scrollview-programmatically-scroll-on-button-press-in-react-native",
+    "name": "ScrollView programmatically scroll on button press in react native",
+    "snippet": "Dec 9, 2020 · You can assign a ref to your ScrollView. This ref contains a function called scrollTo() . Next add the ref to your ScrollView: we need to do is ... Scroll to top of ScrollView - react native - Stack Overflow react native - Is it possible to keep a ScrollView scrolled to the bottom? More results from stackoverflow.com",
+    "host_name": "stackoverflow.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://reactnative.dev/docs/scrollview",
+    "name": "ScrollView - React Native",
+    "snippet": "Aug 12, 2026 · ScrollView. Component that wraps platform ScrollView while providing integration with touch locking \"responder\" system.",
+    "host_name": "reactnative.dev",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.swmansion.com/react-native-reanimated/docs/scroll/scrollTo",
+    "name": "scrollTo | React Native Reanimated - Software Mansion",
+    "snippet": "scrollTo lets you synchronously scroll to a given X or Y offset. An animated ref connected to the ScrollView (or other scrollable) component you'd want to  ...",
+    "host_name": "docs.swmansion.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.ifelsething.com/post/scroll-programmatically-react-native",
+    "name": "Scroll Programmatically in React Native - ifelsething",
+    "snippet": "For that, we can use scrollview's scrollTo() and scrollToEnd() methods to scroll programmatically. Let's see how this scroll works with an example. Create A ...",
+    "host_name": "www.ifelsething.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/slorber/react-native-scroll-into-view",
+    "name": "GitHub - slorber/react-native-scroll-into-view",
+    "snippet": "Scroll a ReactNative View ref into the visible portion of a ScrollView . this library is compatible with Expo managed workflow. Support for composition/refs/ ...",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/reactnative/comments/aaf25h/how_to_make_a_scrollview_render_with_the_scroll",
+    "name": "How to make a ScrollView render with the scroll at the bottom like",
+    "snippet": "Dec 28, 2018 · I know how to use scrollTo but doing it that way, the screen renders and THEN it scrolls down. I want the screen to render already at the ...",
+    "host_name": "www.reddit.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  }
+]

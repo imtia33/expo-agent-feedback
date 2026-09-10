@@ -1,0 +1,56 @@
+[
+  {
+    "url": "https://expo.dev",
+    "name": "Expo SDK 53 — Expo changelog",
+    "snippet": "Apr 30, 2025 — SDK 53 includes React Native 0.79 . The New Architecture is now default everywhere. Improved background tasks Goodbye background-fetch, latest ...",
+    "host_name": "expo.dev",
+    "rank": 0,
+    "date": "Apr 30, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.customer.io",
+    "name": "Changelog | Customer.io Docs",
+    "snippet": "August 29, 2025 code changes Improvements Updated React Native SDK from 4.7.0 to 4.8.0 . Added support for queueing sticky sessions on iOS. It is compatible ...",
+    "host_name": "docs.customer.io",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://blog.logrocket.com",
+    "name": "A checklist for mastering Expo SDK 53",
+    "snippet": "May 15, 2025 — The new release of SDK 53 means there are several big updates and many new features for the Expo ecosystem. In this upcoming section, we will go ... Read more",
+    "host_name": "blog.logrocket.com",
+    "rank": 2,
+    "date": "May 15, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com",
+    "name": "Upgrade SDK 52 to SDK 53 #158389",
+    "snippet": "May 17, 2025 — SDK 53 includes React Native 0.79 and React 19, which bring breaking changes; Node 18 reached End-Of-Life, so Node 20+ is recommended for SDK 53 ... Read more",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "May 17, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://community.draftbit.com",
+    "name": "Expo 53 Now Available",
+    "snippet": "We'll switch over to using Expo 53 as the default for new apps in October 2025 , at which time you'll have the usual opportunity to migrate your ... Read more",
+    "host_name": "community.draftbit.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://news.ycombinator.com",
+    "name": "With the recent Expo SDK 53 update that introduced a slew",
+    "snippet": "Jun 8, 2025 — With the recent Expo SDK 53 update that introduced a slew of breaking changes, I've been contemplating switching my app to native. Read more",
+    "host_name": "news.ycombinator.com",
+    "rank": 5,
+    "date": "Jun 8, 2025",
+    "favicon": ""
+  }
+]
