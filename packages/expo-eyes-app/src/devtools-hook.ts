@@ -2,30 +2,32 @@
  * DevTools hook attachment.
  *
  * React Native installs __REACT_DEVTOOLS_GLOBAL_HOOK__ at startup via
- * react-native@0.87/Libraries/Core/setUpReactDevTools.js. We just attach
- * listeners to the existing hook — we don't call initialize() ourselves.
+ * react-native@0.87/Libraries/Core/setUpReactDevTools.js (which calls
+ * react-devtools-core's `initialize()`). We attach listeners to the
+ * existing hook — we do NOT call initialize() ourselves.
  *
- * The hook exposes per-renderer interfaces (one per React root). Each
- * renderer interface has methods like:
- *   - walkTree(commitCallback, rootCommitCallback)
- *   - getFiberForID(id)
- *   - getDisplayNameForFiberID(id)
- *   - findNativeNodesForFiberID(id)
- *   - inspectElement(id)  → full props/state/hooks
+ * API verified against react-devtools-core@8.0.0 / RN 0.87
+ * (see docs/libraries/rn-devtools-hook-API.md).
  *
- * We keep a map of rendererID → rendererInterface. When the agent calls
- * inspect(), we walk the tree, calling findNativeNodesForFiberID() on each
- * fiber to get its host instance, then read layout via the DOM-like API.
+ * Key findings from research:
+ *   - `iface.walkTree(cb)` does NOT exist (removed in v4.x / RN 0.66).
+ *     We walk fibers manually via `hook.getFiberRoots(rendererID)`.
+ *   - `iface.findNativeNodesForFiberID` renamed to
+ *     `iface.findHostInstancesForElementID` in RN 0.82+ (React 19).
+ *   - `iface.getFiberID` never existed publicly.
+ *   - `hook._renderers` is the v3 name; modern hook uses `hook.renderers`.
+ *   - `'renderer-attached'` payload is `{id, rendererInterface}` (NOT {id, renderer}).
  */
 
 interface DevToolsHook {
-  _renderers: Map<number, any>;
-  rendererInterfaces?: Map<number, any>;
+  renderers: Map<number, any>;
+  rendererInterfaces: Map<number, any>;
   on: (event: string, cb: (data: any) => void) => void;
   off?: (event: string, cb: (data: any) => void) => void;
   emit?: (event: string, data: any) => void;
-  inject?: (config: any) => number;
-  subs?: Map<string, Set<(data: any) => void>>;
+  inject?: (config: any) => number | null;
+  getFiberRoots: (rendererID: number) => Set<any>;
+  supportsFiber: boolean;
 }
 
 function getHook(): DevToolsHook | null {
@@ -37,7 +39,7 @@ function getHook(): DevToolsHook | null {
 
 /** Map of rendererID → rendererInterface. */
 const rendererInterfaces = new Map<number, any>();
-
+const rendererIds = new Set<number>();
 let isAttached = false;
 
 export function attachDevToolsHook(): void {
@@ -48,16 +50,17 @@ export function attachDevToolsHook(): void {
     return;
   }
 
-  // If renderers are already attached (RN has been running for a moment), capture them.
-  if (hook.rendererInterfaces) {
+  // Capture any renderers already attached.
+  if (hook.rendererInterfaces instanceof Map) {
     for (const [id, iface] of hook.rendererInterfaces.entries()) {
       rendererInterfaces.set(id, iface);
+      rendererIds.add(id);
     }
   }
-  if (hook._renderers) {
-    for (const [id, renderer] of hook._renderers.entries()) {
-      // The renderer interface may not be set yet — but the renderer is.
-      // We'll catch it on the 'renderer-attached' event.
+  // `hook.renderers` is the lower-level registry (Map on modern versions).
+  if (hook.renderers instanceof Map) {
+    for (const id of hook.renderers.keys()) {
+      rendererIds.add(id);
       if (!rendererInterfaces.has(id) && hook.rendererInterfaces) {
         const iface = hook.rendererInterfaces.get(id);
         if (iface) rendererInterfaces.set(id, iface);
@@ -66,15 +69,16 @@ export function attachDevToolsHook(): void {
   }
 
   // Listen for new renderers attaching (e.g. after a reload).
+  // Per research: the 'renderer-attached' payload is { id, rendererInterface }.
   try {
-    hook.on('renderer-attached', ({ id, renderer }: { id: number; renderer: any }) => {
-      // The interface is added to rendererInterfaces slightly after the event fires.
-      setTimeout(() => {
-        const iface = hook.rendererInterfaces?.get(id);
-        if (iface) {
-          rendererInterfaces.set(id, iface);
-        }
-      }, 0);
+    hook.on('renderer-attached', (data: any) => {
+      const id = data?.id;
+      if (typeof id !== 'number') return;
+      const iface = data.rendererInterface || hook.rendererInterfaces?.get(id);
+      if (iface) {
+        rendererInterfaces.set(id, iface);
+        rendererIds.add(id);
+      }
     });
   } catch (e) {
     // Some hook versions emit different event names; ignore.
@@ -91,45 +95,99 @@ export function getRendererInterface(): any | null {
   return null;
 }
 
-/** Return all renderer interfaces. */
-export function getAllRendererInterfaces(): any[] {
-  return Array.from(rendererInterfaces.values());
+/** Return all renderer IDs (we walk roots per renderer). */
+export function getRendererIds(): number[] {
+  return Array.from(rendererIds);
+}
+
+/** Return the global hook (for getFiberRoots). */
+export function getHookRef(): DevToolsHook | null {
+  return getHook();
 }
 
 /**
- * Walk every fiber in every renderer. Callback returns false to skip
- * the subtree of this fiber.
+ * Walk every fiber in every renderer by traversing `hook.getFiberRoots()`
+ * and following `.child` / `.sibling` pointers.
+ *
+ * This is the modern replacement for the removed `iface.walkTree()`.
+ * Pattern verified in react-devtools-shared/src/backend/fiber/renderer.js
+ * (`flushInitialOperations`).
+ *
+ * @param visit Called for each fiber. Return false to skip its subtree.
  */
 export function walkFibers(
-  visit: (fiber: any, rendererInterface: any) => void | boolean,
+  visit: (fiber: any) => void | boolean,
 ): void {
-  for (const iface of rendererInterfaces.values()) {
-    if (!iface || typeof iface.walkTree !== 'function') continue;
+  const hook = getHook();
+  if (!hook) return;
+
+  for (const rendererID of rendererIds) {
+    let roots: Set<any> | undefined;
     try {
-      iface.walkTree((fiber: any) => {
-        return visit(fiber, iface);
-      });
-    } catch (e) {
-      // Some renderers throw if walked before mounting; skip.
+      roots = hook.getFiberRoots(rendererID);
+    } catch {
+      continue;
+    }
+    if (!roots || typeof roots.forEach !== 'function') continue;
+
+    for (const root of roots) {
+      // root is a FiberRoot; root.current is the HostRoot fiber
+      const hostRoot = root?.current;
+      if (!hostRoot) continue;
+      walkFiberSiblings(hostRoot, visit);
     }
   }
 }
 
-/** Get the host instance(s) for a given fiber. */
-export function findNativeNodesForFiber(fiber: any, iface: any): any[] {
-  if (!iface) return [];
-  try {
-    if (typeof iface.findNativeNodesForFiberID === 'function') {
-      const id = iface.getFiberID?.(fiber) ?? fiber?.['_debugID'] ?? null;
-      if (id != null) {
-        const nodes = iface.findNativeNodesForFiberID(id);
-        return Array.isArray(nodes) ? nodes.filter(Boolean) : [];
-      }
+function walkFiberSiblings(fiber: any, visit: (fiber: any) => void | boolean): void {
+  let node = fiber;
+  while (node) {
+    let skipSubtree = false;
+    try {
+      skipSubtree = visit(node) === false;
+    } catch {
+      // Skip this node but keep going.
+      skipSubtree = true;
     }
-  } catch {}
-  // Fall back to the fiber's stateNode (host component).
-  if (fiber?.stateNode && typeof fiber.stateNode === 'object') {
+    if (!skipSubtree && node.child) {
+      walkFiberSiblings(node.child, visit);
+    }
+    node = node.sibling;
+  }
+}
+
+/**
+ * Find host instances for a given fiber.
+ *
+ * Modern API (RN 0.82+, React 19): `iface.findHostInstancesForElementID(id)`
+ * — requires a DevTools element id.
+ *
+ * Legacy API (RN ≤ 0.81): `iface.findNativeNodesForFiberID(id)`.
+ *
+ * In both cases, we need the DevTools element id for the fiber. There's
+ * no public API to convert fiber → element id. We fall back to reading
+ * `fiber.stateNode` directly for HostComponent fibers (tag === 5), which
+ * is the host instance.
+ */
+export function findHostInstancesForFiber(fiber: any): any[] {
+  if (!fiber) return [];
+
+  // Direct read: HostComponent fibers have a stateNode that IS the host instance.
+  // Fiber tag 5 = HostComponent (verified in ReactWorkTags).
+  if (fiber.tag === 5 && fiber.stateNode) {
     return [fiber.stateNode];
   }
+
+  // For non-host fibers, try to find host children (descend .child tree).
+  if (fiber.tag !== 5 && fiber.child) {
+    const hosts: any[] = [];
+    let child = fiber.child;
+    while (child) {
+      hosts.push(...findHostInstancesForFiber(child));
+      child = child.sibling;
+    }
+    return hosts.slice(0, 1); // first host child only, for layout purposes
+  }
+
   return [];
 }

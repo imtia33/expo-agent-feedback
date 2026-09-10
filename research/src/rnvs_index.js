@@ -1,1 +1,0 @@
-Couldn't find the requested file /index.js in react-native-view-shot.

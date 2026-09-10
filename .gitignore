@@ -1,2 +1,44 @@
-skills/
+# Dependencies
 node_modules/
+.expo/
+dist/
+build/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+token.txt
+
+# Build artifacts
+*.tsbuildinfo
+
+# Test outputs
+coverage/
+.nyc_output/
+
+# Tool results (ephemeral)
+tool-results/
+
+# Upload directory (your existing relay code, not for the repo)
+upload/
+
+# Internal skill files (not part of this project)
+skills/
+
+# Research scratch (we keep docs/ but not research/)
+research/
+
+# Worklog (internal)
+worklog.md
