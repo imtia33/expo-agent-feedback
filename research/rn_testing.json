@@ -1,0 +1,56 @@
+[
+  {
+    "url": "https://github.com",
+    "name": "Visualize debug output · callstack react-native-testing-library",
+    "snippet": "Has anyone tried to \"visualize\" the JSON representation of a component /screen (what . debug () returns) ? I found https://github.com/jest-community/jest ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "http://oss.callstack.com",
+    "name": "`screen` object - React Native Testing Library",
+    "snippet": "component JSON representation, The container provides access to the entire rendered tree . Use it to query or manipulate the rendered output, similar to how ...",
+    "host_name": "oss.callstack.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://reactnative.dev",
+    "name": "Testing",
+    "snippet": "Aug 12, 2026 — Component testing libraries such as React Native Testing Library facilitate writing user-centric tests by careful choice of provided APIs.",
+    "host_name": "reactnative.dev",
+    "rank": 2,
+    "date": "Aug 12, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://dev.to",
+    "name": "Testing react native with testing library",
+    "snippet": "Jan 7, 2021 — In this application we are going to test the App component . Create a file called App.spec.js (or App. test .js). and import these files to it.",
+    "host_name": "dev.to",
+    "rank": 3,
+    "date": "Jan 7, 2021",
+    "favicon": ""
+  },
+  {
+    "url": "https://reactnavigation.org",
+    "name": "Writing tests",
+    "snippet": "React Native Testing Library provides a toBeVisible matcher that can be used to check if an element is visible to the user.",
+    "host_name": "reactnavigation.org",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.coddykit.com",
+    "name": "Rendering Components with React Native Testing Library",
+    "snippet": "Use render from @ testing - library / react - native to mount components , query elements by text or testID, and assert that expected content is visible.",
+    "host_name": "www.coddykit.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  }
+]

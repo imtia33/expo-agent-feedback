@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://www.youtube.com/watch?v=j7LK96nRXP4",
+    "name": "Detect Multiple Touches in React Native with the Gesture  - YouTube",
+    "snippet": "Oct 17, 2018 · In this video you'll be introduced to React Native's Gesture Responder System by creating a component to detect n number of presses.",
+    "host_name": "www.youtube.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.swmansion.com/react-native-gesture-handler/docs/2.x",
+    "name": "Introduction | React Native Gesture Handler - Software Mansion",
+    "snippet": "A way to use a platform's native touch handling system for recognizing gestures (like pinch, rotation, pan and a few others).",
+    "host_name": "docs.swmansion.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://reactnative.dev/docs/gesture-responder-system",
+    "name": "Gesture Responder System - React Native",
+    "snippet": "Aug 12, 2026 · The gesture responder system manages the lifecycle of gestures in your app. scrolling, sliding on a widget, or tapping. This uses the responder ...",
+    "host_name": "reactnative.dev",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://medium.com/@expertappdevs/react-native-gesture-responder-system-e73e5c1e8ed2",
+    "name": "React Native Gesture Responder System | by Expert App Devs",
+    "snippet": "Jul 2, 2025 · It is a system that lets developers handle touch gestures like swipes, drags, pinches, and taps with full control and lifecycle management.",
+    "host_name": "medium.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://blog.logrocket.com/react-native-gesture-handler-tutorial-examples",
+    "name": "React Native Gesture Handler: Swipe, long-press, and more",
+    "snippet": "Jul 24, 2024 · Implementing gestures in a React Native app improves the user experience. Learn how to create swipeable, pan, long-press, and other ...",
+    "host_name": "blog.logrocket.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reactnativeschool.com/topic/gestures",
+    "name": "Topic: \"Gestures\" - React Native School",
+    "snippet": "Swiping is a common gesture on mobile devices. In this lesson we'll learn how to leverage React Native Gesture Handler to build swiping actions in your app.",
+    "host_name": "www.reactnativeschool.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://egghead.io/lessons/react-native-implement-a-long-press-button-with-react-native-s-gesture-responder-system",
+    "name": "Implement a Long Press Button with React Native's Gesture",
+    "snippet": "Oct 12, 2018 · In this video you'll learn to leverage React Native's Gesture Responder System to create a component that calls a function only if you ...",
+    "host_name": "egghead.io",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.expo.dev/tutorial/gestures",
+    "name": "Add gestures - Expo Documentation",
+    "snippet": "The React Native Gesture Handler library provides built-in native components that can handle gestures. It recognizes pan, tap, rotation, and other gestures ...",
+    "host_name": "docs.expo.dev",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=zYIvl9rEEK8",
+    "name": "Implement a Long Press Button with React Native's Gesture",
+    "snippet": "Oct 17, 2018 · In this video you'll learn to leverage React Native's Gesture Responder System to create a component that calls a function only if you ...",
+    "host_name": "www.youtube.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://heartbeat.comet.ml/how-to-use-the-pinch-to-zoom-gesture-in-react-native-apps-34346dbc653f",
+    "name": "How to Use the Pinch to Zoom Gesture in React Native Apps",
+    "snippet": "Dec 16, 2019 · This pinch gesture is achievable using PinchGestureHandler from the library itself. This handler tracks the distance between two fingers and ...",
+    "host_name": "heartbeat.comet.ml",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]
