@@ -58,6 +58,19 @@ function resolveRelayUrl(): string {
 }
 
 export default function RootLayout() {
+  // On web (sandbox preview), DON'T wrap in EyesProvider — the web preview
+  // only exists to keep the preview URL alive and show the public domain.
+  // We don't want it connecting to the relay (it would displace Expo Go or
+  // add noise). Only native (Expo Go) connects to the relay.
+  if (Platform.OS === 'web') {
+    return (
+      <>
+        <StatusBar style="auto" />
+        <Stack screenOptions={{ headerShown: true }} />
+      </>
+    );
+  }
+
   const relayUrl = resolveRelayUrl();
   return (
     <EyesProvider relayUrl={relayUrl} token={TOKEN}>

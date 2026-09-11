@@ -633,3 +633,233 @@ export async function diagnostics(): Promise<any> {
   };
 }
 
+// ─── swipe (synthetic gesture: pressIn → move → pressOut) ────────────
+//
+// Fires the Pressability touch sequence that simulates a swipe/drag.
+// RN's Pressability (Pressable, ScrollView, FlatList) listens to
+// onResponderGrant → onResponderMove → onResponderRelease. We synthesize
+// these via the fiber's memoizedProps handlers.
+
+export interface SwipeArgs {
+  /** Starting viewTag (swipe begins at center of this view) */
+  viewTag: number;
+  /** Relative offset from the start point. e.g. {dx: 0, dy: -200} = swipe up */
+  dx: number;
+  dy: number;
+  /** Total duration of the swipe in ms (default 250) */
+  durationMs?: number;
+  /** Number of move steps (default 10 — more = smoother) */
+  steps?: number;
+}
+
+export async function swipe(args: SwipeArgs): Promise<{ ok: boolean }> {
+  const { viewTag, dx, dy, durationMs = 250, steps = 10 } = args;
+  if (typeof viewTag !== 'number') throw Object.assign(new Error('viewTag is required'), { code: 'BAD_ARGS' });
+
+  const fiber = await findFiberByViewTag(viewTag);
+  if (!fiber) throw Object.assign(new Error(`viewTag ${viewTag} not found`), { code: 'VIEW_NOT_FOUND' });
+
+  // Find the scrollable/pressable ancestor that handles touch
+  const responderFiber = findScrollableOrPressableFiber(fiber);
+  if (!responderFiber) {
+    throw Object.assign(new Error(`No scrollable/pressable ancestor for viewTag ${viewTag}`), { code: 'NOT_SCROLLABLE' });
+  }
+
+  // Read the view's frame to compute the start point (center of the view)
+  const hostInstance = getHostInstanceForFiber(responderFiber);
+  let startX = 0, startY = 0;
+  if (hostInstance && typeof hostInstance.measureInWindow === 'function') {
+    await new Promise<void>((resolve) => {
+      try {
+        hostInstance.measureInWindow((x: number, y: number, w: number, h: number) => {
+          startX = x + w / 2;
+          startY = y + h / 2;
+          resolve();
+        });
+        setTimeout(resolve, 200);
+      } catch { resolve(); }
+    });
+  }
+
+  const props = responderFiber.memoizedProps || {};
+
+  // Synthetic touch events
+  const makeTouchEvent = (x: number, y: number, phase: 'began' | 'moved' | 'ended') => ({
+    nativeEvent: {
+      touches: [{ locationX: x, locationY: y, pageX: x, pageY: y, identifier: 1, timestamp: Date.now() }],
+      changedTouches: [{ locationX: x, locationY: y, pageX: x, pageY: y, identifier: 1, timestamp: Date.now() }],
+      locationX: x, locationY: y, pageX: x, pageY: y,
+      timestamp: Date.now(), identifier: 1, target: viewTag,
+    },
+    currentTarget: null, target: null,
+    bubbles: false, cancelable: false, defaultPrevented: false,
+    eventPhase: 0, isTrusted: false,
+    isDefaultPrevented: () => false, isPropagationStopped: () => false,
+    persist: () => {}, preventDefault: () => {}, stopPropagation: () => {},
+    timeStamp: Date.now(), type: 'touch' + phase,
+  });
+
+  // Fire pressIn
+  if (typeof props.onTouchStart === 'function') { try { props.onTouchStart(makeTouchEvent(startX, startY, 'began')); } catch {} }
+  if (typeof props.onResponderGrant === 'function') { try { props.onResponderGrant(makeTouchEvent(startX, startY, 'began')); } catch {} }
+  if (typeof props.onPressIn === 'function') { try { props.onPressIn(makeTouchEvent(startX, startY, 'began')); } catch {} }
+
+  // Fire move steps
+  const stepMs = durationMs / steps;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = startX + dx * t;
+    const y = startY + dy * t;
+    if (typeof props.onTouchMove === 'function') { try { props.onTouchMove(makeTouchEvent(x, y, 'moved')); } catch {} }
+    if (typeof props.onResponderMove === 'function') { try { props.onResponderMove(makeTouchEvent(x, y, 'moved')); } catch {} }
+    // Use setTimeout via await to space out the moves
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+
+  // Fire pressOut
+  const endX = startX + dx;
+  const endY = startY + dy;
+  if (typeof props.onTouchEnd === 'function') { try { props.onTouchEnd(makeTouchEvent(endX, endY, 'ended')); } catch {} }
+  if (typeof props.onResponderRelease === 'function') { try { props.onResponderRelease(makeTouchEvent(endX, endY, 'ended')); } catch {} }
+  if (typeof props.onPressOut === 'function') { try { props.onPressOut(makeTouchEvent(endX, endY, 'ended')); } catch {} }
+
+  return { ok: true };
+}
+
+function findScrollableOrPressableFiber(fiber: any): any | null {
+  const SCROLLABLE_TYPES = new Set([
+    'ScrollView', 'FlatList', 'SectionList', 'VirtualizedList', 'FlashList',
+    'RCTScrollView', 'KeyboardAvoidingView',
+  ]);
+  let current: any = fiber;
+  let iterations = 0;
+  while (current && iterations < 40) {
+    const typeName = current?.elementType?.displayName || current?.type?.displayName || current?.type?.name;
+    if (typeName && SCROLLABLE_TYPES.has(typeName)) return current;
+    const props = current.memoizedProps;
+    if (props && typeof props === 'object') {
+      // If it has any touch responder handlers, use it
+      if (typeof props.onResponderGrant === 'function' ||
+          typeof props.onTouchStart === 'function' ||
+          typeof props.onPressIn === 'function') {
+        return current;
+      }
+    }
+    current = current.return;
+    iterations++;
+  }
+  return null;
+}
+
+// ─── screenshot (capture the screen as base64 PNG) ───────────────────
+//
+// Uses the native captureView API. On Paper: UIManager.captureViewSnapshot.
+// On Fabric: takeSnapshot via the renderer. Falls back to a tree-based
+// "virtual screenshot" (just the inspect tree) if native capture fails.
+
+export async function screenshot(args: { viewTag?: number } = {}): Promise<{
+  ok: boolean;
+  dataUrl?: string;
+  format: string;
+  width: number;
+  height: number;
+  fallback?: string;
+}> {
+  const screen = Dimensions.get('window');
+  const targetViewTag = args.viewTag;
+
+  // Try native capture (Android/iOS)
+  try {
+    const capture = (UIManager as any)?.captureViewSnapshot;
+    if (typeof capture === 'function') {
+      const tag = targetViewTag ?? (rootViewInstance ? (findNodeHandle(rootViewInstance) as number) : null);
+      if (tag) {
+        const result = await new Promise<any>((resolve) => {
+          try {
+            capture(tag, (data: any) => resolve(data));
+          } catch (e: any) {
+            resolve({ error: e.message });
+          }
+        });
+        if (result && !result.error) {
+          return {
+            ok: true,
+            dataUrl: result.dataURL || result.uri,
+            format: 'png',
+            width: result.width || screen.width,
+            height: result.height || screen.height,
+          };
+        }
+      }
+    }
+  } catch {}
+
+  // Fallback: virtual screenshot (the inspect tree, serialized)
+  try {
+    const { elements } = await listVisibleElements({ step: 40 });
+    return {
+      ok: true,
+      format: 'tree',
+      width: screen.width,
+      height: screen.height,
+      fallback: JSON.stringify(elements.map((e: any) => ({
+        name: e.name,
+        testID: e.props?.testID,
+        text: e.props?.text,
+        frame: e.frame,
+      }))),
+    };
+  } catch (e: any) {
+    return { ok: false, format: 'error', width: 0, height: 0, fallback: e.message };
+  }
+}
+
+// ─── waitForElement (poll inspect until an element matching testID appears) ──
+
+export async function waitForElement(args: {
+  testID?: string;
+  text?: string;
+  /** Max time to wait in ms (default 5000) */
+  timeoutMs?: number;
+  /** Poll interval in ms (default 300) */
+  intervalMs?: number;
+}): Promise<{ ok: boolean; found: boolean; element?: any; waitedMs: number }> {
+  const { testID, text, timeoutMs = 5000, intervalMs = 300 } = args;
+  if (!testID && !text) throw Object.assign(new Error('testID or text is required'), { code: 'BAD_ARGS' });
+
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const { elements } = await listVisibleElements({ step: 40 });
+      const found = elements.find((e: any) => {
+        if (testID && e.props?.testID === testID) return true;
+        if (text && typeof e.props?.text === 'string' && e.props.text.includes(text)) return true;
+        return false;
+      });
+      if (found) {
+        return { ok: true, found: true, element: found, waitedMs: Date.now() - t0 };
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return { ok: true, found: false, waitedMs: Date.now() - t0 };
+}
+
+// ─── readScreen (extract all visible text as a flat list) ────────────
+
+export async function readScreen(): Promise<{
+  texts: Array<{ text: string; testID?: string; frame?: any }>;
+  count: number;
+}> {
+  const { elements } = await listVisibleElements({ step: 30 });
+  const texts: Array<{ text: string; testID?: string; frame?: any }> = [];
+  for (const e of elements) {
+    const text = e.props?.text || e.props?.value || e.props?.title;
+    if (typeof text === 'string' && text.length > 0) {
+      texts.push({ text, testID: e.props?.testID, frame: e.frame });
+    }
+  }
+  return { texts, count: texts.length };
+}
+
+

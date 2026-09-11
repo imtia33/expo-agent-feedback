@@ -33,6 +33,10 @@ const VALID_TOOLS = new Set([
   'type',
   'scrollTo',
   'expandList',
+  'swipe',
+  'screenshot',
+  'waitFor',
+  'readScreen',
 ]);
 
 const TOOL_SCHEMAS = {
@@ -81,6 +85,37 @@ const TOOL_SCHEMAS = {
       to: 'number (default from + 14)',
     },
     returns: '{ items, renderedRange: [from, to], itemCount, renderTimeMs }',
+  },
+  swipe: {
+    description: 'Swipe/drag from an element by (dx, dy). Fires pressIn → move → pressOut on the scrollable/pressable ancestor.',
+    args: {
+      ref: 'string (required) — element to start the swipe from',
+      dx: 'number (required) — horizontal offset in px',
+      dy: 'number (required) — vertical offset in px (negative = up)',
+      durationMs: 'number (default 250)',
+      steps: 'number (default 10)',
+    },
+    returns: '{ ok }',
+  },
+  screenshot: {
+    description: 'Capture the screen. Returns base64 PNG (native) or a tree fallback.',
+    args: { ref: 'string (optional — capture a specific view instead of the whole screen)' },
+    returns: '{ ok, dataUrl?, format, width, height, fallback? }',
+  },
+  waitFor: {
+    description: 'Poll inspect until an element with the given testID or text appears. Useful after navigation/async.',
+    args: {
+      testID: 'string (optional)',
+      text: 'string (optional — substring match)',
+      timeoutMs: 'number (default 5000)',
+      intervalMs: 'number (default 300)',
+    },
+    returns: '{ ok, found, element?, waitedMs }',
+  },
+  readScreen: {
+    description: 'Extract all visible text as a flat list (fast — no tree).',
+    args: {},
+    returns: '{ texts: [{text, testID?, frame?}], count }',
   },
 };
 
@@ -193,6 +228,10 @@ function startHttpServer() {
         case 'type':        result = await require('./tool-router').type(phoneCall, args); break;
         case 'scrollTo':    result = await require('./tool-router').scrollTo(phoneCall, args); break;
         case 'expandList':  result = await require('./tool-router').expandList(phoneCall, args); break;
+        case 'swipe':       result = await require('./tool-router').swipe(phoneCall, args); break;
+        case 'screenshot':  result = await require('./tool-router').screenshot(phoneCall, args); break;
+        case 'waitFor':     result = await require('./tool-router').waitFor(phoneCall, args); break;
+        case 'readScreen':  result = await require('./tool-router').readScreen(phoneCall, args); break;
         default:
           return res.status(404).json({ error: 'unknown_tool', message: `Tool ${tool} not in router` });
       }

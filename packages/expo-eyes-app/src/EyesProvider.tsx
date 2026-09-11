@@ -36,6 +36,10 @@ import {
   scrollToIndex,
   diagnostics,
   setRootViewInstance,
+  swipe,
+  screenshot,
+  waitForElement,
+  readScreen,
 } from './primitives';
 
 export interface EyesProviderProps {
@@ -58,6 +62,10 @@ const PRIMITIVES = new Set([
   'scroll',
   'scrollToIndex',
   'diagnostics',
+  'swipe',
+  'screenshot',
+  'waitForElement',
+  'readScreen',
 ]);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
@@ -67,6 +75,10 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   scroll,
   scrollToIndex,
   diagnostics,
+  swipe,
+  screenshot,
+  waitForElement,
+  readScreen,
 };
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {
