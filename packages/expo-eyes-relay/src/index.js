@@ -3,17 +3,25 @@
  * expo-eyes-relay — CLI entry point.
  *
  * Usage:
- *   npx expo-eyes-relay [--token TOKEN] [--tunnel] [--http-port PORT]
- *                       [--ws-port PORT] [--host ADDR] [--verbose]
+ *   npx expo-eyes-relay [--token TOKEN] [--tunnel] [--app-url EXP_URL]
+ *                       [--http-port PORT] [--ws-port PORT] [--host ADDR] [--verbose]
  *
  * Token behavior:
  *   - No --tunnel, no --token → open relay, no auth (easy local dev on LAN)
  *   - --tunnel, no --token    → refuse to start (security: tunnel is public)
  *   - --token TOKEN           → enforce auth on WS + HTTP
  *
+ * --app-url: metadata only. The phone still connects OUT to the relay via WS.
+ *   Useful for the agent to know which app it's driving (e.g. exp://192.168.1.5:8081).
+ *   In the future, this URL may be used for relay → phone direct connection.
+ *
+ * --tunnel: spawns cloudflared (or ngrok/localtunnel fallback) to expose the
+ *   HTTP port publicly. The phone WS connection stays on LAN.
+ *
  * Pattern verified against:
  *   - ws 8.21.3        (docs/libraries/ws-API-summary.md)
- *   - express 5.2.1    (docs/libraries/express-API-summary.md)
+ *   - express 5.2.1   (docs/libraries/express-API-summary.md)
+ *   - cloudflared      (docs/libraries/cloudflared-API-summary.md)
  */
 
 const crypto = require('crypto');
@@ -23,38 +31,38 @@ const os = require('os');
 const config = require('./config');
 const { startWsServer } = require('./ws-server');
 const { startHttpServer } = require('./http-server');
+const { startTunnel, killAll } = require('./tunnel');
 const session = require('./session-manager');
 
-const TOKEN_FILE = path.join(os.homedir(), '.expo-eyes-token');
-
-function loadOrCreateToken() {
-  if (config.token) return config.token;
-  // If tunneling, we MUST have a token — refuse to start without one.
-  if (config.tunnel) {
-    return null;
+function argValue(name) {
+  const flag = `--${name}`;
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === flag && i + 1 < process.argv.length) return process.argv[i + 1];
+    if (process.argv[i].startsWith(`${flag}=`)) return process.argv[i].slice(flag.length + 1);
   }
-  // No token + no tunnel → return null (open relay, LAN-only).
-  return null;
+  return process.env[`EXPO_EYES_${name.toUpperCase().replace(/-/g, '_')}`];
 }
 
-function printBanner(token) {
+function printBanner(token, tunnelUrl, appUrl) {
   console.log('');
   console.log('╔══════════════════════════════════════════════════════════════════╗');
   console.log('║                        expo-eyes-relay                           ║');
   console.log('╠══════════════════════════════════════════════════════════════════╣');
-  console.log(`║  HTTP (agent):  http://${config.host}:${config.httpPort}`.padEnd(67) + '║');
+  console.log(`║  HTTP (local):  http://${config.host}:${config.httpPort}`.padEnd(67) + '║');
   console.log(`║  WS   (phone):  ws://${config.host}:${config.wsPort}`.padEnd(67) + '║');
+  if (tunnelUrl) {
+    console.log(`║  HTTP (public): ${tunnelUrl}`.padEnd(67) + '║');
+  }
+  if (appUrl) {
+    console.log(`║  App URL:       ${appUrl}`.padEnd(67) + '║');
+  }
   console.log('╠══════════════════════════════════════════════════════════════════╣');
 
   if (token) {
-    console.log('║  Auth: Bearer token required (Authorization: Bearer <token>)     ║');
-    console.log('║                                                                  ║');
+    console.log('║  Auth: Bearer token required                                      ║');
     console.log('║  ' + token.padEnd(63) + '║');
-    console.log('║                                                                  ║');
   } else {
     console.log('║  Auth: DISABLED (open relay, LAN-only)                           ║');
-    console.log('║  ⚠️  Do not use this mode with --tunnel. Anyone with the URL     ║');
-    console.log('║     could control your phone.                                    ║');
   }
 
   console.log('╚══════════════════════════════════════════════════════════════════╝');
@@ -67,16 +75,21 @@ function printBanner(token) {
   }
   console.log('');
   console.log('From an agent (curl):');
+  const baseUrl = tunnelUrl || `http://YOUR_LAN_IP:${config.httpPort}`;
   if (token) {
-    console.log(`  curl -H "Authorization: Bearer ${token}" \\`);
-    console.log(`       http://YOUR_LAN_IP:${config.httpPort}/health`);
+    console.log(`  curl -H "Authorization: Bearer ${token}" ${baseUrl}/health`);
   } else {
-    console.log(`  curl http://YOUR_LAN_IP:${config.httpPort}/health`);
+    console.log(`  curl ${baseUrl}/health`);
+  }
+  if (tunnelUrl) {
+    console.log('');
+    console.log('🌐 Tunnel is public — anyone with this URL can call the relay.');
+    console.log('   Use the token. Don\'t share the URL publicly.');
   }
   console.log('');
 }
 
-function main() {
+async function main() {
   // Validate: --tunnel requires --token
   if (config.tunnel && !config.token) {
     console.error('[relay] ERROR: --tunnel requires --token.');
@@ -86,8 +99,8 @@ function main() {
     process.exit(1);
   }
 
-  const token = loadOrCreateToken();
-  config.token = token; // could be null
+  const token = config.token;
+  const appUrl = argValue('app-url');
 
   // Subscribe session events to log
   session.subscribe((event, data) => {
@@ -102,7 +115,24 @@ function main() {
   startWsServer();
   startHttpServer();
 
-  printBanner(token);
+  // Start tunnel if requested
+  let tunnelUrl = null;
+  if (config.tunnel) {
+    console.log('[relay] starting tunnel...');
+    try {
+      tunnelUrl = await startTunnel(config.httpPort);
+    } catch (e) {
+      console.error(`[relay] tunnel failed: ${e.message}`);
+      process.exit(1);
+    }
+  }
+
+  printBanner(token, tunnelUrl, appUrl);
+
+  // Store appUrl in session for /health endpoint
+  if (appUrl) {
+    session.appUrl = appUrl;
+  }
 
   // Graceful shutdown
   let shuttingDown = false;
@@ -113,6 +143,7 @@ function main() {
     if (session.phoneWs) {
       try { session.phoneWs.close(1001, 'server shutdown'); } catch {}
     }
+    killAll(); // kill tunnel processes
     setTimeout(() => process.exit(0), 500).unref();
   }
   process.on('SIGINT', () => shutdown('SIGINT'));

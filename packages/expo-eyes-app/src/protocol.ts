@@ -14,7 +14,7 @@
 export interface ToolCall {
   type: 'tool-call';
   callId: string;
-  tool: ToolName;
+  tool: PrimitiveName;  // app only accepts the 5 primitives
   args: Record<string, any>;
 }
 
@@ -70,16 +70,21 @@ export interface PhoneReadyEvent {
 
 export type PhoneEvent = LogEvent | ErrorEvent | PhoneReadyEvent;
 
-// ─── Tool names ───────────────────────────────────────────────────────
+// ─── Primitive names (app side) ───────────────────────────────────────
+//
+// The app SDK exposes only these 5 primitives. The relay implements the
+// agent-facing tools (inspect, snapshot, tap, type, scrollTo, expandList,
+// longPress) by composing these primitives.
 
-export type ToolName =
-  | 'inspect'
-  | 'snapshot'
-  | 'tap'
-  | 'longPress'
-  | 'type'
-  | 'scrollTo'
-  | 'expandList';
+export type PrimitiveName =
+  | 'getTree'        // → raw fiber tree (no refs/stableIds/pruning)
+  | 'dispatchEvent'  // → fire onPress/onChangeText/etc. on a fiber
+  | 'readLayout'     // → x/y/width/height for a fiber
+  | 'scroll'         // → scrollTo on a scrollable fiber
+  | 'scrollToIndex'; // → scrollToIndex on a list fiber
+
+// Backward-compat alias
+export type ToolName = PrimitiveName;
 
 // ─── Tree node shape (returned by inspect/snapshot) ───────────────────
 

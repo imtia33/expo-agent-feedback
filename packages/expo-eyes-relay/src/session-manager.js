@@ -44,6 +44,11 @@ class SessionManager {
     }
     this.phoneWs = null;
     this.phoneInfo = null;
+    // Clear the tool-router's cached state too
+    try {
+      const { resetSession } = require('./tool-router');
+      resetSession();
+    } catch (e) { /* tool-router not loaded yet — ignore */ }
     this._notifyListeners('phone-disconnected', {});
     this._log('phone-disconnected', {});
   }
@@ -55,6 +60,9 @@ class SessionManager {
   /**
    * Send a tool call to the phone and return a Promise that resolves with
    * the phone's result. Rejects on timeout or phone disconnect.
+   *
+   * This is the LOW-LEVEL primitive call. Agent-facing tools (inspect, tap,
+   * etc.) are implemented in tool-router.js, which uses this method.
    */
   callTool(tool, args) {
     return new Promise((resolve, reject) => {

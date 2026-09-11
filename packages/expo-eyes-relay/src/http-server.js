@@ -124,7 +124,8 @@ function startHttpServer() {
   app.get('/health', (_req, res) => {
     res.json({
       ok: true,
-      relay: { httpPort: config.httpPort, wsPort: config.wsPort },
+      relay: { httpPort: config.httpPort, wsPort: config.wsPort, tunnel: !!config.tunnel },
+      appUrl: session.appUrl || null,
       phone: session.getStatus(),
     });
   });
@@ -155,13 +156,26 @@ function startHttpServer() {
     }
 
     const args = req.body || {};
+
+    // The phone-call function passed to tool-router.
+    // It calls session.callTool (low-level primitive call to the phone).
+    const phoneCall = (primitive, primArgs) => session.callTool(primitive, primArgs);
+
     try {
-      const result = await session.callTool(tool, args);
-      res.json({
-        ok: true,
-        tool,
-        result,
-      });
+      // Dispatch to the right tool-router function
+      let result;
+      switch (tool) {
+        case 'inspect':     result = await require('./tool-router').inspect(phoneCall); break;
+        case 'snapshot':    result = await require('./tool-router').snapshot(phoneCall, args); break;
+        case 'tap':         result = await require('./tool-router').tap(phoneCall, args); break;
+        case 'longPress':   result = await require('./tool-router').longPress(phoneCall, args); break;
+        case 'type':        result = await require('./tool-router').type(phoneCall, args); break;
+        case 'scrollTo':    result = await require('./tool-router').scrollTo(phoneCall, args); break;
+        case 'expandList':  result = await require('./tool-router').expandList(phoneCall, args); break;
+        default:
+          return res.status(404).json({ error: 'unknown_tool', message: `Tool ${tool} not in router` });
+      }
+      res.json({ ok: true, tool, result });
     } catch (e) {
       const status = e.code === 'NO_PHONE' ? 503 :
                      e.code === 'TIMEOUT' ? 504 :
