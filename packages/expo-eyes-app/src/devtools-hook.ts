@@ -31,7 +31,7 @@ interface DevToolsHook {
 }
 
 function getHook(): DevToolsHook | null {
-  const g = global as any;
+  const g = (globalThis as any);
   const hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) return null;
   return hook as DevToolsHook;
