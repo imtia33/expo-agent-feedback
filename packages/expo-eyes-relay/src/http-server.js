@@ -37,6 +37,7 @@ const VALID_TOOLS = new Set([
   'screenshot',
   'waitFor',
   'readScreen',
+  'layout',
 ]);
 
 const TOOL_SCHEMAS = {
@@ -116,6 +117,14 @@ const TOOL_SCHEMAS = {
     description: 'Extract all visible text as a flat list (fast — no tree).',
     args: {},
     returns: '{ texts: [{text, testID?, frame?}], count }',
+  },
+  layout: {
+    description: 'Precise element measurement + overflow detection. The "is it broken?" check.',
+    args: {
+      ref: 'string (optional) — element ref (tid:xxx, r5, or name). If omitted, audits ALL elements.',
+      testID: 'string (optional) — element testID',
+    },
+    returns: '{ element: {frame, issues}, allIssues: [...], totalElements, elementsWithIssues }',
   },
 };
 
@@ -232,6 +241,7 @@ function startHttpServer() {
         case 'screenshot':  result = await require('./tool-router').screenshot(phoneCall, args); break;
         case 'waitFor':     result = await require('./tool-router').waitFor(phoneCall, args); break;
         case 'readScreen':  result = await require('./tool-router').readScreen(phoneCall, args); break;
+        case 'layout':      result = await require('./tool-router').layout(phoneCall, args); break;
         default:
           return res.status(404).json({ error: 'unknown_tool', message: `Tool ${tool} not in router` });
       }

@@ -40,6 +40,7 @@ import {
   screenshot,
   waitForElement,
   readScreen,
+  layout,
 } from './primitives';
 
 export interface EyesProviderProps {
@@ -66,6 +67,7 @@ const PRIMITIVES = new Set([
   'screenshot',
   'waitForElement',
   'readScreen',
+  'layout',
 ]);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
@@ -79,6 +81,7 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   screenshot,
   waitForElement,
   readScreen,
+  layout,
 };
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {

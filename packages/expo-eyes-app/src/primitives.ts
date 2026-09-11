@@ -932,4 +932,162 @@ export async function readScreen(): Promise<{
   return { texts, count: texts.length };
 }
 
+// ─── layout (precise measurement + overflow detection) ───────────────
+//
+// Returns the precise frame of an element (via measureInWindow) AND
+// analyzes it for overflow:
+//   - viewport overflow: element extends beyond the screen
+//   - text truncation: text is clipped (numberOfLines exceeded)
+//   - zero-size: element has width=0 or height=0 (not rendered / hidden)
+//   - off-screen: element is scrolled out of view (y > screen height)
+//
+// This is the "is it broken?" check — verify intended vs actual layout.
+
+export interface LayoutResult {
+  testID?: string;
+  type: string;
+  frame: { x: number; y: number; width: number; height: number };
+  screen: { width: number; height: number };
+  issues: string[];
+  // Overflow details
+  overflowsRight?: number;  // px beyond right edge
+  overflowsBottom?: number; // px beyond bottom edge
+  overflowsLeft?: number;   // px beyond left edge (negative x)
+  overflowsTop?: number;    // px beyond top edge (negative y)
+  // Text info (if it's a Text element)
+  text?: string;
+  textTruncated?: boolean;
+  numberOfLines?: number;
+}
+
+export async function layout(args: { ref?: string; testID?: string }): Promise<{
+  element: LayoutResult | null;
+  allIssues: LayoutResult[];
+  totalElements: number;
+  elementsWithIssues: number;
+}> {
+  const screen = Dimensions.get('window');
+  const { elements } = await listVisibleElements({ step: 25 });
+
+  // Find the target element (by testID or name)
+  let target: VisibleElement | null = null;
+  if (args.testID) {
+    target = elements.find((e) => e.props?.testID === args.testID) || null;
+  } else if (args.ref) {
+    // ref can be "tid:xxx" or "r5" (positional)
+    if (args.ref.startsWith('tid:')) {
+      const tid = args.ref.slice(4);
+      target = elements.find((e) => e.props?.testID === tid) || null;
+    } else if (args.ref.startsWith('r') && /^r\d+$/.test(args.ref)) {
+      const idx = parseInt(args.ref.slice(1), 10);
+      target = elements[idx] || null;
+    } else {
+      const lower = args.ref.toLowerCase();
+      target = elements.find((e) => e.name?.toLowerCase().includes(lower)) || null;
+    }
+  }
+
+  // Analyze ALL elements for issues (the "layout audit")
+  const allIssues: LayoutResult[] = [];
+  for (const e of elements) {
+    const issues: string[] = [];
+    const f = e.frame;
+    let overflowsRight: number | undefined;
+    let overflowsBottom: number | undefined;
+    let overflowsLeft: number | undefined;
+    let overflowsTop: number | undefined;
+
+    // Zero-size check
+    if (f.width === 0 || f.height === 0) {
+      issues.push('zero-size');
+    }
+
+    // Viewport overflow checks
+    if (f.x < 0) {
+      overflowsLeft = Math.abs(f.x);
+      issues.push(`overflows-left:${Math.abs(f.x)}px`);
+    }
+    if (f.y < 0) {
+      overflowsTop = Math.abs(f.y);
+      issues.push(`overflows-top:${Math.abs(f.y)}px`);
+    }
+    if (f.x + f.width > screen.width) {
+      overflowsRight = (f.x + f.width) - screen.width;
+      issues.push(`overflows-right:${overflowsRight}px`);
+    }
+    if (f.y + f.height > screen.height) {
+      overflowsBottom = (f.y + f.height) - screen.height;
+      issues.push(`overflows-bottom:${overflowsBottom}px`);
+    }
+
+    // Off-screen (entirely below viewport)
+    if (f.y > screen.height) {
+      issues.push('off-screen-below');
+    }
+    if (f.y + f.height < 0) {
+      issues.push('off-screen-above');
+    }
+
+    // Text truncation heuristic: if it's a Text/TextInput with text
+    // and numberOfLines is set, the text might be truncated.
+    const text = e.props?.text || e.props?.value;
+    const numberOfLines = e.props?.numberOfLines;
+    let textTruncated: boolean | undefined;
+    if (text && typeof text === 'string' && text.length > 0) {
+      // Can't definitively detect truncation without measuring text layout,
+      // but if numberOfLines is set and the text is long, flag it
+      if (numberOfLines && text.length > numberOfLines * 40) {
+        textTruncated = true;
+        issues.push('text-possibly-truncated');
+      }
+    }
+
+    if (issues.length > 0) {
+      allIssues.push({
+        testID: e.props?.testID,
+        type: e.name,
+        frame: f,
+        screen: { width: screen.width, height: screen.height },
+        issues,
+        overflowsRight,
+        overflowsBottom,
+        overflowsLeft,
+        overflowsTop,
+        text: text || undefined,
+        textTruncated,
+        numberOfLines,
+      });
+    }
+  }
+
+  // Build the target element's result
+  let elementResult: LayoutResult | null = null;
+  if (target) {
+    const f = target.frame;
+    const issues: string[] = [];
+    if (f.width === 0 || f.height === 0) issues.push('zero-size');
+    if (f.x < 0) issues.push(`overflows-left:${Math.abs(f.x)}px`);
+    if (f.y < 0) issues.push(`overflows-top:${Math.abs(f.y)}px`);
+    if (f.x + f.width > screen.width) issues.push(`overflows-right:${(f.x + f.width) - screen.width}px`);
+    if (f.y + f.height > screen.height) issues.push(`overflows-bottom:${(f.y + f.height) - screen.height}px`);
+
+    elementResult = {
+      testID: target.props?.testID,
+      type: target.name,
+      frame: f,
+      screen: { width: screen.width, height: screen.height },
+      issues,
+      text: target.props?.text || target.props?.value,
+    };
+  }
+
+  return {
+    element: elementResult,
+    allIssues,
+    totalElements: elements.length,
+    elementsWithIssues: allIssues.length,
+  };
+}
+
+
 

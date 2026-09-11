@@ -359,6 +359,13 @@ async function readScreen(phoneCall) {
   return result;
 }
 
+// ─── layout (precise measurement + overflow detection) ────────────────
+
+async function layout(phoneCall, args) {
+  const result = await phoneCall('layout', { ref: args.ref, testID: args.testID });
+  return result;
+}
+
 module.exports = {
   inspect,
   snapshot,
@@ -371,5 +378,6 @@ module.exports = {
   screenshot,
   waitFor,
   readScreen,
+  layout,
   resetSession,
 };
