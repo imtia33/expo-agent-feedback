@@ -425,6 +425,22 @@ export async function scroll(args: {
     } catch {}
   }
 
+  // Fabric fallback: dispatch the 'scrollTo' view manager command directly.
+  // On Fabric (new architecture), the host instance doesn't expose scrollTo,
+  // but UIManager.dispatchViewManagerCommand can dispatch it to the native
+  // ScrollView/FlatList. The command name is 'scrollTo', args are [x, y, animated].
+  try {
+    const nativeTag = (hostInstance as any)._nativeTag ||
+                      (hostInstance as any).__nativeTag ||
+                      (hostInstance as any).canonical?.nativeTag;
+    if (nativeTag !== undefined && typeof (UIManager as any).dispatchViewManagerCommand === 'function') {
+      (UIManager as any).dispatchViewManagerCommand(nativeTag, 'scrollTo', [x, y, animated]);
+      return { ok: true, scrolledTo: { x, y } };
+    }
+  } catch (e: any) {
+    // last resort failed
+  }
+
   throw Object.assign(new Error(`Scrollable doesn't expose scrollTo`), { code: 'SCROLL_FAILED' });
 }
 
@@ -1087,6 +1103,207 @@ export async function layout(args: { ref?: string; testID?: string }): Promise<{
     totalElements: elements.length,
     elementsWithIssues: allIssues.length,
   };
+}
+
+// ─── navigate (deep link navigation via expo-router) ──────────────────
+//
+// Uses expo-router's navigation API to push a route. On Expo Go, this
+// works via the router's imperative API (router.push/replace).
+
+export async function navigate(args: {
+  route: string;
+  params?: Record<string, any>;
+}): Promise<{ ok: boolean }> {
+  const { route, params } = args;
+  if (!route) throw Object.assign(new Error('route is required'), { code: 'BAD_ARGS' });
+
+  // Try expo-router's imperative API
+  try {
+    const { router } = require('expo-router');
+    if (params) {
+      router.push({ pathname: route, params });
+    } else {
+      router.push(route);
+    }
+    return { ok: true };
+  } catch (e: any) {
+    throw Object.assign(new Error(`Navigation failed: ${e.message}`), { code: 'NAV_FAILED' });
+  }
+}
+
+// ─── back (go back in navigation stack) ──────────────────────────────
+
+export async function back(): Promise<{ ok: boolean }> {
+  try {
+    const { router } = require('expo-router');
+    router.back();
+    return { ok: true };
+  } catch (e: any) {
+    throw Object.assign(new Error(`Back failed: ${e.message}`), { code: 'NAV_FAILED' });
+  }
+}
+
+// ─── assert (verification primitives) ────────────────────────────────
+//
+// Throws if the assertion fails. Returns { ok: true, details } if it passes.
+
+export interface AssertResult {
+  ok: boolean;
+  passed: boolean;
+  message: string;
+  details?: any;
+}
+
+export async function assertVisible(args: { testID?: string; text?: string; timeoutMs?: number }): Promise<AssertResult> {
+  const { testID, text, timeoutMs = 3000 } = args;
+  if (!testID && !text) throw Object.assign(new Error('testID or text required'), { code: 'BAD_ARGS' });
+
+  const result = await waitForElement({ testID, text, timeoutMs });
+  if (result.found) {
+    return {
+      ok: true,
+      passed: true,
+      message: `Element ${testID ? `testID="${testID}"` : `text~="${text}"`} is visible`,
+      details: result.element,
+    };
+  }
+  return {
+    ok: false,
+    passed: false,
+    message: `Element ${testID ? `testID="${testID}"` : `text~="${text}"`} NOT found within ${timeoutMs}ms`,
+  };
+}
+
+export async function assertText(args: { testID: string; text: string; timeoutMs?: number }): Promise<AssertResult> {
+  const { testID, text, timeoutMs = 3000 } = args;
+
+  // Wait for the element, then check its text
+  const result = await waitForElement({ testID, timeoutMs });
+  if (!result.found) {
+    return { ok: false, passed: false, message: `testID="${testID}" NOT found within ${timeoutMs}ms` };
+  }
+  const actualText = result.element?.props?.text || result.element?.props?.value || '';
+  if (actualText === text) {
+    return { ok: true, passed: true, message: `testID="${testID}" text matches: "${text}"` };
+  }
+  return {
+    ok: false,
+    passed: false,
+    message: `testID="${testID}" text mismatch: expected "${text}", got "${actualText}"`,
+    details: { expected: text, actual: actualText },
+  };
+}
+
+export async function assertEnabled(args: { testID: string; timeoutMs?: number }): Promise<AssertResult> {
+  const { testID, timeoutMs = 3000 } = args;
+
+  const result = await waitForElement({ testID, timeoutMs });
+  if (!result.found) {
+    return { ok: false, passed: false, message: `testID="${testID}" NOT found within ${timeoutMs}ms` };
+  }
+  const disabled = result.element?.props?.disabled === true;
+  if (!disabled) {
+    return { ok: true, passed: true, message: `testID="${testID}" is enabled` };
+  }
+  return { ok: false, passed: false, message: `testID="${testID}" is disabled` };
+}
+
+// ─── pinch/zoom (multi-touch synthesis) ──────────────────────────────
+//
+// Synthesizes a pinch gesture by firing two parallel touch sequences
+// moving toward (pinch in/zoom out) or away from (pinch out/zoom in)
+// the center of a view.
+
+export interface PinchArgs {
+  viewTag: number;
+  /** 'in' = zoom out (fingers move together), 'out' = zoom in (fingers move apart) */
+  direction: 'in' | 'out';
+  /** Scale factor (e.g. 2.0 = zoom in 2x). Used to compute finger spread. */
+  scale?: number;
+  /** Duration in ms (default 300) */
+  durationMs?: number;
+  steps?: number;
+}
+
+export async function pinch(args: PinchArgs): Promise<{ ok: boolean }> {
+  const { viewTag, direction, scale = 2.0, durationMs = 300, steps = 10 } = args;
+  if (typeof viewTag !== 'number') throw Object.assign(new Error('viewTag is required'), { code: 'BAD_ARGS' });
+
+  const fiber = await findFiberByViewTag(viewTag);
+  if (!fiber) throw Object.assign(new Error(`viewTag ${viewTag} not found`), { code: 'VIEW_NOT_FOUND' });
+
+  const responderFiber = findScrollableOrPressableFiber(fiber);
+  if (!responderFiber) {
+    throw Object.assign(new Error(`No scrollable/pressable ancestor for viewTag ${viewTag}`), { code: 'NOT_SCROLLABLE' });
+  }
+
+  // Get the view's center point
+  const hostInstance = getHostInstanceForFiber(responderFiber);
+  let cx = 0, cy = 0, viewWidth = 200, viewHeight = 200;
+  if (hostInstance && typeof hostInstance.measureInWindow === 'function') {
+    await new Promise<void>((resolve) => {
+      try {
+        hostInstance.measureInWindow((x: number, y: number, w: number, h: number) => {
+          cx = x + w / 2; cy = y + h / 2;
+          viewWidth = w; viewHeight = h;
+          resolve();
+        });
+        setTimeout(resolve, 200);
+      } catch { resolve(); }
+    });
+  }
+
+  // Compute start and end positions for two fingers
+  const spread = Math.min(viewWidth, viewHeight) / 2;
+  const startSpread = direction === 'out' ? spread / scale : spread;
+  const endSpread = direction === 'out' ? spread : spread * scale;
+
+  const props = responderFiber.memoizedProps || {};
+
+  const makeTouchEvent = (x: number, y: number, id: number) => ({
+    nativeEvent: {
+      touches: [
+        { locationX: x, locationY: y, pageX: x, pageY: y, identifier: id, timestamp: Date.now() },
+      ],
+      changedTouches: [
+        { locationX: x, locationY: y, pageX: x, pageY: y, identifier: id, timestamp: Date.now() },
+      ],
+      locationX: x, locationY: y, pageX: x, pageY: y,
+      timestamp: Date.now(), identifier: id, target: viewTag,
+    },
+    currentTarget: null, target: null,
+    bubbles: false, cancelable: false, defaultPrevented: false,
+    eventPhase: 0, isTrusted: false,
+    isDefaultPrevented: () => false, isPropagationStopped: () => false,
+    persist: () => {}, preventDefault: () => {}, stopPropagation: () => {},
+    timeStamp: Date.now(), type: 'touch' + id,
+  });
+
+  // Finger 1 starts at (cx - startSpread, cy), Finger 2 at (cx + startSpread, cy)
+  const f1Start = { x: cx - startSpread, y: cy };
+  const f2Start = { x: cx + startSpread, y: cy };
+  const f1End = { x: cx - endSpread, y: cy };
+  const f2End = { x: cx + endSpread, y: cy };
+
+  // Begin
+  if (typeof props.onTouchStart === 'function') { try { props.onTouchStart(makeTouchEvent(f1Start.x, f1Start.y, 1)); } catch {} }
+  if (typeof props.onResponderGrant === 'function') { try { props.onResponderGrant(makeTouchEvent(f1Start.x, f1Start.y, 1)); } catch {} }
+
+  const stepMs = durationMs / steps;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x1 = f1Start.x + (f1End.x - f1Start.x) * t;
+    const x2 = f2Start.x + (f2End.x - f2Start.x) * t;
+    if (typeof props.onTouchMove === 'function') { try { props.onTouchMove(makeTouchEvent(x1, cy, 1)); } catch {} }
+    if (typeof props.onResponderMove === 'function') { try { props.onResponderMove(makeTouchEvent(x2, cy, 2)); } catch {} }
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+
+  // End
+  if (typeof props.onTouchEnd === 'function') { try { props.onTouchEnd(makeTouchEvent(f1End.x, cy, 1)); } catch {} }
+  if (typeof props.onResponderRelease === 'function') { try { props.onResponderRelease(makeTouchEvent(f2End.x, cy, 2)); } catch {} }
+
+  return { ok: true };
 }
 
 

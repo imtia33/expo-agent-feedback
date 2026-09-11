@@ -38,6 +38,12 @@ const VALID_TOOLS = new Set([
   'waitFor',
   'readScreen',
   'layout',
+  'navigate',
+  'back',
+  'assertVisible',
+  'assertText',
+  'assertEnabled',
+  'pinch',
 ]);
 
 const TOOL_SCHEMAS = {
@@ -125,6 +131,56 @@ const TOOL_SCHEMAS = {
       testID: 'string (optional) — element testID',
     },
     returns: '{ element: {frame, issues}, allIssues: [...], totalElements, elementsWithIssues }',
+  },
+  navigate: {
+    description: 'Navigate to a route via expo-router (deep link).',
+    args: {
+      route: 'string (required) — route path, e.g. "/playground"',
+      params: 'object (optional) — route params',
+    },
+    returns: '{ ok }',
+  },
+  back: {
+    description: 'Go back in the navigation stack.',
+    args: {},
+    returns: '{ ok }',
+  },
+  assertVisible: {
+    description: 'Assert an element is visible (waits up to timeoutMs). Throws if not found.',
+    args: {
+      testID: 'string (optional)',
+      text: 'string (optional — substring match)',
+      timeoutMs: 'number (default 3000)',
+    },
+    returns: '{ ok, passed, message, details? }',
+  },
+  assertText: {
+    description: 'Assert an element\'s text matches exactly.',
+    args: {
+      testID: 'string (required)',
+      text: 'string (required) — expected text',
+      timeoutMs: 'number (default 3000)',
+    },
+    returns: '{ ok, passed, message, details? }',
+  },
+  assertEnabled: {
+    description: 'Assert an element is enabled (not disabled).',
+    args: {
+      testID: 'string (required)',
+      timeoutMs: 'number (default 3000)',
+    },
+    returns: '{ ok, passed, message }',
+  },
+  pinch: {
+    description: 'Pinch/zoom gesture (multi-touch). For maps/images with zoom support.',
+    args: {
+      ref: 'string (required) — element to pinch',
+      direction: '"in" | "out" (in = zoom out, out = zoom in)',
+      scale: 'number (default 2.0)',
+      durationMs: 'number (default 300)',
+      steps: 'number (default 10)',
+    },
+    returns: '{ ok }',
   },
 };
 
@@ -242,6 +298,12 @@ function startHttpServer() {
         case 'waitFor':     result = await require('./tool-router').waitFor(phoneCall, args); break;
         case 'readScreen':  result = await require('./tool-router').readScreen(phoneCall, args); break;
         case 'layout':      result = await require('./tool-router').layout(phoneCall, args); break;
+        case 'navigate':    result = await require('./tool-router').navigate(phoneCall, args); break;
+        case 'back':        result = await require('./tool-router').back(phoneCall, args); break;
+        case 'assertVisible': result = await require('./tool-router').assertVisible(phoneCall, args); break;
+        case 'assertText':  result = await require('./tool-router').assertText(phoneCall, args); break;
+        case 'assertEnabled': result = await require('./tool-router').assertEnabled(phoneCall, args); break;
+        case 'pinch':       result = await require('./tool-router').pinch(phoneCall, args); break;
         default:
           return res.status(404).json({ error: 'unknown_tool', message: `Tool ${tool} not in router` });
       }

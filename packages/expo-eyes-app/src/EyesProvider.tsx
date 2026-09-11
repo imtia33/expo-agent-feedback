@@ -41,6 +41,12 @@ import {
   waitForElement,
   readScreen,
   layout,
+  navigate,
+  back,
+  assertVisible,
+  assertText,
+  assertEnabled,
+  pinch,
 } from './primitives';
 
 export interface EyesProviderProps {
@@ -68,6 +74,12 @@ const PRIMITIVES = new Set([
   'waitForElement',
   'readScreen',
   'layout',
+  'navigate',
+  'back',
+  'assertVisible',
+  'assertText',
+  'assertEnabled',
+  'pinch',
 ]);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
@@ -82,6 +94,12 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   waitForElement,
   readScreen,
   layout,
+  navigate,
+  back,
+  assertVisible,
+  assertText,
+  assertEnabled,
+  pinch,
 };
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {

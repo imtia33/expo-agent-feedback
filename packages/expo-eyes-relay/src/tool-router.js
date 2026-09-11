@@ -366,6 +366,63 @@ async function layout(phoneCall, args) {
   return result;
 }
 
+// ─── navigate / back ──────────────────────────────────────────────────
+
+async function navigate(phoneCall, args) {
+  const result = await phoneCall('navigate', { route: args.route, params: args.params });
+  // Invalidate cache (screen changed)
+  resetCache();
+  return result;
+}
+
+async function back(phoneCall) {
+  const result = await phoneCall('back', {});
+  resetCache();
+  return result;
+}
+
+// ─── assertions ───────────────────────────────────────────────────────
+
+async function assertVisible(phoneCall, args) {
+  const result = await phoneCall('assertVisible', {
+    testID: args.testID,
+    text: args.text,
+    timeoutMs: args.timeoutMs,
+  });
+  return result;
+}
+
+async function assertText(phoneCall, args) {
+  const result = await phoneCall('assertText', {
+    testID: args.testID,
+    text: args.text,
+    timeoutMs: args.timeoutMs,
+  });
+  return result;
+}
+
+async function assertEnabled(phoneCall, args) {
+  const result = await phoneCall('assertEnabled', {
+    testID: args.testID,
+    timeoutMs: args.timeoutMs,
+  });
+  return result;
+}
+
+// ─── pinch ───────────────────────────────────────────────────────────
+
+async function pinch(phoneCall, args) {
+  const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
+  const result = await phoneCall('pinch', {
+    viewTag,
+    direction: args.direction,
+    scale: args.scale ?? 2.0,
+    durationMs: args.durationMs ?? 300,
+    steps: args.steps ?? 10,
+  });
+  return { ok: result.ok };
+}
+
 module.exports = {
   inspect,
   snapshot,
@@ -379,5 +436,11 @@ module.exports = {
   waitFor,
   readScreen,
   layout,
+  navigate,
+  back,
+  assertVisible,
+  assertText,
+  assertEnabled,
+  pinch,
   resetSession,
 };
