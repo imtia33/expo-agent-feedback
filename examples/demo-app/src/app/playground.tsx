@@ -5,10 +5,10 @@ import { Image as ExpoImage } from 'expo-image';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-// The reanimated babel plugin is configured in babel.config.js.
-// The proxy stubs browser requests, so Expo never runs web SSR — no crash.
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
+// Use @expo/ui's BottomSheet (drop-in replacement for @gorhom/bottom-sheet).
+// Per docs: https://docs.expo.dev/versions/latest/sdk/ui/drop-in-replacements/bottomsheet
+// GestureHandlerRootView is NOT required by this implementation.
+import BottomSheet, { BottomSheetView } from '@expo/ui/community/bottom-sheet';
 
 const SAMPLE_IMAGE = 'https://picsum.photos/seed/expoeyes/400/300';
 
@@ -33,7 +33,7 @@ export default function PlaygroundScreen() {
   };
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <>
       <ScrollView testID="playground-scroll" contentContainerStyle={styles.container}>
         <Text style={styles.title} accessibilityRole="header">Agent Playground</Text>
         <Text style={styles.subtitle}>Tests expo-image, expo-blur, expo-haptics, gradients, bottom sheet, swipe</Text>
@@ -194,7 +194,7 @@ export default function PlaygroundScreen() {
           </Pressable>
         </BottomSheetView>
       </BottomSheet>
-    </GestureHandlerRootView>
+    </>
   );
 }
 
