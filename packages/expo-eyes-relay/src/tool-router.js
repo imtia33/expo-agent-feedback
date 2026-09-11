@@ -50,8 +50,45 @@ const VIRTUALIZED_TYPES = new Set([
   'FlatList', 'SectionList', 'VirtualizedList', 'FlashList', 'MasonryFlashList',
 ]);
 
-const MAX_DEPTH = 12;
-const MAX_NODES = 200;
+const MAX_DEPTH = 50;
+const MAX_NODES = 500;
+
+// Wrapper types that don't count toward depth — they're React Context providers
+// and navigation infrastructure that Expo Router / React Navigation inject.
+// Skipping them lets us reach the actual screen content without bloating the
+// agent's context with 30 levels of providers.
+const TRANSPARENT_WRAPPER_TYPES = new Set([
+  'Unknown',  // Anonymous context providers
+  'LocaleDirContext',
+  'UnhandledLinkingContext',
+  'LinkingContext',
+  'BaseNavigationContainer',
+  'EnsureSingleNavigator',
+  'ThemeProvider',
+  'ThemeContext',
+  'NavigationContainerRefContext',
+  'Route prop',
+  'CurrentRenderContext',
+  'PreventEmptyStack',
+  'StackNavigator',
+  'StackView',
+  'SceneView',
+  'NavigationBuilderContext',
+  'NavigationStateContext',
+  'WithContext',
+  'withDevTools',
+  'AppContainer',
+  'RootTagContext',
+  'main(RootComponent)',
+  'DebuggingOverlay',
+  'LogBoxStateSubscription',
+  'LogBoxNotificationContainer',
+  'ExpoRoot',
+  'ContextNavigator',
+  'App',
+  'RootComponent',
+  'ReactNativeFiberHostComponent',
+]);
 
 // ─── Session state ────────────────────────────────────────────────────
 
@@ -93,6 +130,19 @@ function pruneTree(node, depth, stats) {
   if (!node) return null;
   if (depth > MAX_DEPTH) { stats.pruned++; return null; }
   if (stats.emitted >= MAX_NODES) { stats.pruned++; return null; }
+
+  // Transparent wrappers: skip rendering this node, but recurse into its
+  // children directly. This collapses the 30-level React Context / Expo
+  // Router infrastructure into the actual screen content.
+  if (TRANSPARENT_WRAPPER_TYPES.has(node.type)) {
+    // If this wrapper has exactly one child, return the pruned child directly
+    // (transparent pass-through).
+    const children = node.children || [];
+    if (children.length === 1) {
+      return pruneTree(children[0], depth, stats);  // same depth, don't increment
+    }
+    // Multiple children or none — render this node normally but don't bump depth
+  }
 
   stats.emitted++;
   const ref = refForFid(node.fid);
