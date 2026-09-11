@@ -121,6 +121,73 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
     client.onReady = () => setStatus('connected');
     client.onClose = () => setStatus('disconnected');
 
+    // Capture JS runtime errors + unhandled rejections and forward to the relay.
+    // This makes Expo CLI console errors visible in /tmp/relay.log (via the
+    // event stream) so the agent can debug crashes without reading the Expo
+    // terminal directly.
+    const errorHandler = (event: any) => {
+      const error = event?.error || event?.reason || event;
+      const msg = error?.message || String(error);
+      const stack = error?.stack;
+      try {
+        client.send({
+          type: 'event',
+          event: 'error',
+          message: msg,
+          stack: __DEV__ ? stack : undefined,
+          timestamp: Date.now(),
+        });
+      } catch {}
+    };
+    const rejectionHandler = (event: any) => {
+      const reason = event?.reason;
+      const msg = reason?.message || String(reason);
+      const stack = reason?.stack;
+      try {
+        client.send({
+          type: 'event',
+          event: 'error',
+          message: `Unhandled rejection: ${msg}`,
+          stack: __DEV__ ? stack : undefined,
+          timestamp: Date.now(),
+        });
+      } catch {}
+    };
+    // Capture console.error too (React logs errors via console.error)
+    const origConsoleError = console.error;
+    const consoleErrorHandler = (...args: any[]) => {
+      try {
+        const msg = args.map(a => {
+          if (typeof a === 'string') return a;
+          if (a?.message) return a.message;
+          if (a?.stack) return a.stack.split('\n')[0];
+          try { return JSON.stringify(a).slice(0, 200); } catch { return String(a); }
+        }).join(' ');
+        // Only forward actual errors, not React warnings
+        if (msg.includes('Error') || msg.includes('error') || msg.includes('TypeError') || msg.includes('undefined is not')) {
+          client.send({
+            type: 'event',
+            event: 'error',
+            message: `console.error: ${msg.slice(0, 500)}`,
+            timestamp: Date.now(),
+          });
+        }
+      } catch {}
+      // Call original
+      origConsoleError.apply(console, args as any);
+    };
+
+    // Install handlers (only on native — web is idle, no EyesProvider)
+    if (Platform.OS !== 'web') {
+      // ErrorUtils is RN's global error handler (not window.addEventListener,
+      // which doesn't exist on RN native — it would crash the EyesProvider).
+      try {
+        (globalThis as any).ErrorUtils?.setErrorHandler?.(errorHandler);
+        (globalThis as any).ErrorUtils?.setGlobalHandler?.(errorHandler);
+      } catch {}
+      console.error = consoleErrorHandler as any;
+    }
+
     client.onToolCall = async (msg: ToolCall) => {
       const t0 = Date.now();
       const { callId, tool, args } = msg;
@@ -175,6 +242,10 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
       client.close();
       clientRef.current = null;
       setRootViewInstance(null);
+      // Restore original console.error
+      if (Platform.OS !== 'web') {
+        console.error = origConsoleError as any;
+      }
     };
   }, [relayUrl, token]);
 

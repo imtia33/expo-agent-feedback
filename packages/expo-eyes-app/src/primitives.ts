@@ -19,6 +19,7 @@
  */
 
 import { getRenderers, getAllFiberRoots } from './devtools-hook';
+import { getTypeName } from './raw-tree';
 import { findNodeHandle, UIManager, Platform, Dimensions } from 'react-native';
 
 // ─── Root view instance (for Fabric inspector) ───────────────────────
@@ -164,12 +165,14 @@ export async function inspectAtPoint(args: { x: number; y: number }): Promise<In
 
 // ─── listVisibleElements ──────────────────────────────────────────────
 //
-// Scans the screen in a grid, calls inspectAtPoint at each point, dedupes
-// by viewTag. Returns a flat list of all visible elements.
+// Two-strategy approach:
+//   1. Fiber tree walk (finds ALL elements including off-screen ones in
+//      ScrollViews — essential for finding buttons below the fold)
+//   2. Grid scan via inspectAtPoint (gets accurate frames for on-screen
+//      elements via the native inspector API)
 //
-// Grid resolution: 20px steps. For a 390×844 screen that's ~820 calls.
-// Takes ~2-4 seconds total. Could be optimized by walking the native view
-// hierarchy directly via UIManager, but this approach uses the public API.
+// We merge both: the fiber walk finds elements the grid misses (below fold),
+// the grid scan provides accurate layouts for visible elements.
 
 export async function listVisibleElements(args: { step?: number } = {}): Promise<{
   elements: VisibleElement[];
@@ -177,12 +180,12 @@ export async function listVisibleElements(args: { step?: number } = {}): Promise
   scanned: number;
 }> {
   const t0 = Date.now();
-  const step = args.step ?? 30; // px between grid points
+  const step = args.step ?? 30;
   const screen = Dimensions.get('window');
   const seen = new Map<number, VisibleElement>(); // viewTag → element
   let scanned = 0;
 
-  // Scan in a grid
+  // Strategy 1: grid scan (accurate frames for on-screen elements)
   for (let y = step; y < screen.height; y += step) {
     for (let x = step; x < screen.width; x += step) {
       scanned++;
@@ -195,6 +198,17 @@ export async function listVisibleElements(args: { step?: number } = {}): Promise
     }
   }
 
+  // Strategy 2: fiber tree walk (finds off-screen elements)
+  // This catches elements in ScrollViews that are below/above the fold.
+  try {
+    const fiberElements = walkFiberTreeForElements();
+    for (const el of fiberElements) {
+      if (el.viewTag && !seen.has(el.viewTag)) {
+        seen.set(el.viewTag, el);
+      }
+    }
+  } catch {}
+
   // Sort by y, then x (top-to-bottom, left-to-right)
   const elements = Array.from(seen.values()).sort((a, b) => {
     if (Math.abs(a.frame.y - b.frame.y) > 10) return a.frame.y - b.frame.y;
@@ -206,6 +220,62 @@ export async function listVisibleElements(args: { step?: number } = {}): Promise
     renderTimeMs: Date.now() - t0,
     scanned,
   };
+}
+
+// Walk the fiber tree directly to find ALL host components (including
+// off-screen ones in ScrollViews). Uses getAllFiberRoots() which handles
+// both Paper and Fabric + portals.
+function walkFiberTreeForElements(): VisibleElement[] {
+  const elements: VisibleElement[] = [];
+  const rootFibers = getAllFiberRoots();
+
+  for (const hostRoot of rootFibers) {
+    walkFiberForElements(hostRoot, [], elements);
+  }
+
+  return elements;
+}
+
+function walkFiberForElements(
+  fiber: any,
+  hierarchy: string[],
+  out: VisibleElement[],
+): void {
+  if (!fiber) return;
+
+  const typeName = getTypeName(fiber);
+  const newHierarchy = [...hierarchy, typeName];
+
+  // HostComponent (tag === 5) — has a native stateNode with a viewTag
+  if (fiber.tag === 5 && fiber.stateNode) {
+    let viewTag =
+      fiber.stateNode._nativeTag ||
+      fiber.stateNode.__nativeTag ||
+      fiber.stateNode.canonical?.nativeTag;
+    if (viewTag === undefined && typeof fiber.stateNode.getViewTag === 'function') {
+      try { viewTag = fiber.stateNode.getViewTag(); } catch {}
+    }
+
+    if (viewTag !== undefined && viewTag !== null) {
+      const props = sanitizeProps(fiber.memoizedProps || {});
+      const element: VisibleElement = {
+        viewTag: viewTag as number,
+        name: typeName,
+        hierarchy: newHierarchy,
+        frame: { x: 0, y: 0, width: 0, height: 0 }, // filled by grid scan if visible
+        props,
+        depth: newHierarchy.length - 1,
+      };
+      out.push(element);
+    }
+  }
+
+  // Walk children
+  let child = fiber.child;
+  while (child) {
+    walkFiberForElements(child, newHierarchy, out);
+    child = child.sibling;
+  }
 }
 
 // ─── dispatchEvent (by viewTag, not fid) ──────────────────────────────

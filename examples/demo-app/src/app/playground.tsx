@@ -1,22 +1,14 @@
-import { View, Text, Pressable, ScrollView, StyleSheet, Alert, Image, Platform } from 'react-native';
-import { useState, useRef, lazy, Suspense } from 'react';
+import { View, Text, Pressable, ScrollView, StyleSheet, Image } from 'react-native';
+import { useState, useRef } from 'react';
 import { useRouter } from 'expo-router';
 import { Image as ExpoImage } from 'expo-image';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-
-// Lazy-load BottomSheet + GestureHandler — they use requestAnimationFrame
-// which crashes Node SSR. Only load on native (Expo Go).
-const GestureHandlerRootView = Platform.OS === 'web'
-  ? View
-  : lazy(() => import('react-native-gesture-handler').then(m => ({ default: m.GestureHandlerRootView })));
-const BottomSheet = Platform.OS === 'web'
-  ? null
-  : lazy(() => import('@gorhom/bottom-sheet').then(m => ({ default: m.default })));
-const BottomSheetView = Platform.OS === 'web'
-  ? View
-  : lazy(() => import('@gorhom/bottom-sheet').then(m => ({ default: m.BottomSheetView })));
+// The reanimated babel plugin is configured in babel.config.js.
+// The proxy stubs browser requests, so Expo never runs web SSR — no crash.
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
 
 const SAMPLE_IMAGE = 'https://picsum.photos/seed/expoeyes/400/300';
 
@@ -46,7 +38,6 @@ export default function PlaygroundScreen() {
         <Text style={styles.title} accessibilityRole="header">Agent Playground</Text>
         <Text style={styles.subtitle}>Tests expo-image, expo-blur, expo-haptics, gradients, bottom sheet, swipe</Text>
 
-        {/* Counter (tap test) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Counter (tap test)</Text>
           <Text style={styles.counterValue} testID="counter-value">{count}</Text>
@@ -81,7 +72,6 @@ export default function PlaygroundScreen() {
           </View>
         </View>
 
-        {/* expo-image (network image with caching) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>expo-image (network)</Text>
           <ExpoImage
@@ -95,7 +85,6 @@ export default function PlaygroundScreen() {
           />
         </View>
 
-        {/* expo-blur (blur overlay) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>expo-blur (blur overlay)</Text>
           <View style={styles.blurContainer}>
@@ -106,7 +95,6 @@ export default function PlaygroundScreen() {
           </View>
         </View>
 
-        {/* LinearGradient */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>expo-linear-gradient</Text>
           <LinearGradient
@@ -120,7 +108,6 @@ export default function PlaygroundScreen() {
           </LinearGradient>
         </View>
 
-        {/* Haptics */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>expo-haptics</Text>
           <View style={styles.row}>
@@ -136,7 +123,6 @@ export default function PlaygroundScreen() {
           </View>
         </View>
 
-        {/* Color picker (swipe test) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Swipe test (change color)</Text>
           <Text style={styles.swipeCount} testID="swipe-count">Swipes: {swipeCount}</Text>
@@ -144,8 +130,6 @@ export default function PlaygroundScreen() {
             testID="swipe-target"
             accessibilityRole="button"
             accessibilityLabel="Swipe me left or right"
-            onPressIn={() => {}}
-            onPressOut={() => {}}
             style={[styles.swipeBox, { backgroundColor: colors[selectedColor] }]}
           >
             <Text style={styles.swipeText} testID="swipe-label">
@@ -162,7 +146,6 @@ export default function PlaygroundScreen() {
           </View>
         </View>
 
-        {/* Bottom sheet */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>@gorhom/bottom-sheet</Text>
           <Pressable
@@ -176,7 +159,6 @@ export default function PlaygroundScreen() {
           </Pressable>
         </View>
 
-        {/* Back */}
         <View style={styles.section}>
           <Pressable
             testID="back-home"
@@ -192,31 +174,26 @@ export default function PlaygroundScreen() {
         <View style={{ height: 200 }} />
       </ScrollView>
 
-      {/* Bottom Sheet (native only) */}
-      {Platform.OS !== 'web' && BottomSheet && (
-        <Suspense fallback={null}>
-          <BottomSheet
-            ref={sheetRef}
-            snapPoints={['25%', '50%', '90%']}
-            enablePanDownToClose
-            testID="bottom-sheet"
+      <BottomSheet
+        ref={sheetRef}
+        snapPoints={['25%', '50%', '90%']}
+        enablePanDownToClose
+        testID="bottom-sheet"
+      >
+        <BottomSheetView style={styles.sheetContent}>
+          <Text style={styles.sheetTitle} testID="sheet-title">Bottom Sheet Open!</Text>
+          <Text style={styles.sheetSubtitle}>Drag me down to close</Text>
+          <Pressable
+            testID="close-sheet"
+            accessibilityRole="button"
+            accessibilityLabel="Close bottom sheet"
+            style={[styles.button, { backgroundColor: '#0a7ea4', marginTop: 20 }]}
+            onPress={() => sheetRef.current?.close()}
           >
-            <BottomSheetView style={styles.sheetContent}>
-              <Text style={styles.sheetTitle} testID="sheet-title">Bottom Sheet Open!</Text>
-              <Text style={styles.sheetSubtitle}>Drag me down to close</Text>
-              <Pressable
-                testID="close-sheet"
-                accessibilityRole="button"
-                accessibilityLabel="Close bottom sheet"
-                style={[styles.button, { backgroundColor: '#0a7ea4', marginTop: 20 }]}
-                onPress={() => sheetRef.current?.close()}
-              >
-                <Text style={styles.buttonText}>Close</Text>
-              </Pressable>
-            </BottomSheetView>
-          </BottomSheet>
-        </Suspense>
-      )}
+            <Text style={styles.buttonText}>Close</Text>
+          </Pressable>
+        </BottomSheetView>
+      </BottomSheet>
     </GestureHandlerRootView>
   );
 }
