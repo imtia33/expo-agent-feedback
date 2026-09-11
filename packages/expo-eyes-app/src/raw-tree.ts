@@ -96,7 +96,7 @@ function fidFor(fiber: object): number {
   return fid;
 }
 
-function getTypeName(fiber: any): string {
+export function getTypeName(fiber: any): string {
   const fiberType = fiber?.elementType;
   return (
     (typeof fiberType === 'string' && fiberType) ||

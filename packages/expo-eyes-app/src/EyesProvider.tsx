@@ -24,7 +24,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform, findNodeHandle } from 'react-native';
 import { WSClient } from './ws-client';
 import { attachDevToolsHook } from './devtools-hook';
 import { ToolCall, ToolResult } from './protocol';
@@ -35,6 +35,11 @@ import {
   scroll,
   scrollToIndex,
   diagnostics,
+  setRootViewInstance,
+  swipe,
+  screenshot,
+  waitForElement,
+  readScreen,
 } from './primitives';
 
 export interface EyesProviderProps {
@@ -57,6 +62,10 @@ const PRIMITIVES = new Set([
   'scroll',
   'scrollToIndex',
   'diagnostics',
+  'swipe',
+  'screenshot',
+  'waitForElement',
+  'readScreen',
 ]);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
@@ -66,11 +75,40 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   scroll,
   scrollToIndex,
   diagnostics,
+  swipe,
+  screenshot,
+  waitForElement,
+  readScreen,
 };
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {
   const clientRef = useRef<WSClient | null>(null);
+  const rootViewRef = useRef<View | null>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+
+  // Capture the root view's host instance so inspectAtPoint can pass it
+  // as `inspectedView` to the renderer's getInspectorDataForViewAtPoint.
+  // On Fabric (new architecture), passing null means "no view to search
+  // within" → the native hit-test never runs → empty hierarchy.
+  // We need the actual root host instance.
+  const captureRootInstance = () => {
+    const node = rootViewRef.current;
+    if (!node) return;
+    // findNodeHandle returns the native view tag; for the inspector API we
+    // need the host instance itself. On Fabric, the ref IS the public
+    // instance (has _internalInstanceHandle). On Paper, we get the
+    // stateNode via the fiber.
+    let hostInstance: any = null;
+    try {
+      // The ref on a View gives us the host component instance directly
+      hostInstance = (node as any)._internalInstanceHandle
+        ? node  // Fabric: the ref is the public instance
+        : (node as any);  // Paper: same
+    } catch {}
+    if (hostInstance) {
+      setRootViewInstance(hostInstance);
+    }
+  };
 
   useEffect(() => {
     if (!__DEV__) return; // no-op in production
@@ -82,6 +120,73 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
 
     client.onReady = () => setStatus('connected');
     client.onClose = () => setStatus('disconnected');
+
+    // Capture JS runtime errors + unhandled rejections and forward to the relay.
+    // This makes Expo CLI console errors visible in /tmp/relay.log (via the
+    // event stream) so the agent can debug crashes without reading the Expo
+    // terminal directly.
+    const errorHandler = (event: any) => {
+      const error = event?.error || event?.reason || event;
+      const msg = error?.message || String(error);
+      const stack = error?.stack;
+      try {
+        client.send({
+          type: 'event',
+          event: 'error',
+          message: msg,
+          stack: __DEV__ ? stack : undefined,
+          timestamp: Date.now(),
+        });
+      } catch {}
+    };
+    const rejectionHandler = (event: any) => {
+      const reason = event?.reason;
+      const msg = reason?.message || String(reason);
+      const stack = reason?.stack;
+      try {
+        client.send({
+          type: 'event',
+          event: 'error',
+          message: `Unhandled rejection: ${msg}`,
+          stack: __DEV__ ? stack : undefined,
+          timestamp: Date.now(),
+        });
+      } catch {}
+    };
+    // Capture console.error too (React logs errors via console.error)
+    const origConsoleError = console.error;
+    const consoleErrorHandler = (...args: any[]) => {
+      try {
+        const msg = args.map(a => {
+          if (typeof a === 'string') return a;
+          if (a?.message) return a.message;
+          if (a?.stack) return a.stack.split('\n')[0];
+          try { return JSON.stringify(a).slice(0, 200); } catch { return String(a); }
+        }).join(' ');
+        // Only forward actual errors, not React warnings
+        if (msg.includes('Error') || msg.includes('error') || msg.includes('TypeError') || msg.includes('undefined is not')) {
+          client.send({
+            type: 'event',
+            event: 'error',
+            message: `console.error: ${msg.slice(0, 500)}`,
+            timestamp: Date.now(),
+          });
+        }
+      } catch {}
+      // Call original
+      origConsoleError.apply(console, args as any);
+    };
+
+    // Install handlers (only on native — web is idle, no EyesProvider)
+    if (Platform.OS !== 'web') {
+      // ErrorUtils is RN's global error handler (not window.addEventListener,
+      // which doesn't exist on RN native — it would crash the EyesProvider).
+      try {
+        (globalThis as any).ErrorUtils?.setErrorHandler?.(errorHandler);
+        (globalThis as any).ErrorUtils?.setGlobalHandler?.(errorHandler);
+      } catch {}
+      console.error = consoleErrorHandler as any;
+    }
 
     client.onToolCall = async (msg: ToolCall) => {
       const t0 = Date.now();
@@ -130,9 +235,17 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
 
     client.connect();
 
+    // Capture the root view instance after first render (refs are set by then).
+    captureRootInstance();
+
     return () => {
       client.close();
       clientRef.current = null;
+      setRootViewInstance(null);
+      // Restore original console.error
+      if (Platform.OS !== 'web') {
+        console.error = origConsoleError as any;
+      }
     };
   }, [relayUrl, token]);
 
@@ -141,10 +254,15 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
   }
 
   return (
-    <>
+    <View
+      ref={rootViewRef as any}
+      collapsable={false}
+      style={styles.rootWrapper}
+      onLayout={captureRootInstance}
+    >
       {children}
       {showStatus && <StatusBadge status={status} />}
-    </>
+    </View>
   );
 }
 
@@ -158,6 +276,9 @@ function StatusBadge({ status }: { status: 'connecting' | 'connected' | 'disconn
 }
 
 const styles = StyleSheet.create({
+  rootWrapper: {
+    flex: 1,
+  },
   badge: {
     position: 'absolute',
     top: 50,

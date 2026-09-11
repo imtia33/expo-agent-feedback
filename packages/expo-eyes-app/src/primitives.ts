@@ -18,8 +18,29 @@
  *            react-native@0.86.3/src/private/devsupport/devmenu/elementinspector/
  */
 
-import { getRenderers } from './devtools-hook';
+import { getRenderers, getAllFiberRoots } from './devtools-hook';
+import { getTypeName } from './raw-tree';
 import { findNodeHandle, UIManager, Platform, Dimensions } from 'react-native';
+
+// ─── Root view instance (for Fabric inspector) ───────────────────────
+//
+// On Fabric (RN new architecture), getInspectorDataForViewAtPoint requires
+// a non-null `inspectedView` argument — it calls getNodeFromPublicInstance
+// on it to get the fabric node, then runs nativeFabricUIManager.findNodeAtPoint.
+// If inspectedView is null, no hit-test happens → empty hierarchy.
+//
+// The EyesProvider captures its root View ref and calls setRootViewInstance
+// so inspectAtPoint can pass it to the inspector API.
+
+let rootViewInstance: any = null;
+
+export function setRootViewInstance(instance: any): void {
+  rootViewInstance = instance;
+}
+
+export function getRootViewInstance(): any {
+  return rootViewInstance;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -55,6 +76,11 @@ export async function inspectAtPoint(args: { x: number; y: number }): Promise<In
   const t0 = Date.now();
   const renderers = getRenderers();
 
+  // On Fabric, we must pass a non-null inspectedView (the root view instance)
+  // so the renderer can resolve it to a fabric node and run the native
+  // hit-test. Without this, getInspectorDataForViewAtPoint returns empty.
+  const inspectedView = rootViewInstance;
+
   // Try each renderer — only one will have a view at this point.
   for (const renderer of renderers) {
     const inspector = renderer?.rendererConfig?.getInspectorDataForViewAtPoint;
@@ -63,7 +89,7 @@ export async function inspectAtPoint(args: { x: number; y: number }): Promise<In
     try {
       const viewData = await new Promise<any>((resolve) => {
         try {
-          inspector(null, x, y, (data: any) => {
+          inspector(inspectedView, x, y, (data: any) => {
             resolve(data);
           });
         } catch (e) {
@@ -139,12 +165,14 @@ export async function inspectAtPoint(args: { x: number; y: number }): Promise<In
 
 // ─── listVisibleElements ──────────────────────────────────────────────
 //
-// Scans the screen in a grid, calls inspectAtPoint at each point, dedupes
-// by viewTag. Returns a flat list of all visible elements.
+// Two-strategy approach:
+//   1. Fiber tree walk (finds ALL elements including off-screen ones in
+//      ScrollViews — essential for finding buttons below the fold)
+//   2. Grid scan via inspectAtPoint (gets accurate frames for on-screen
+//      elements via the native inspector API)
 //
-// Grid resolution: 20px steps. For a 390×844 screen that's ~820 calls.
-// Takes ~2-4 seconds total. Could be optimized by walking the native view
-// hierarchy directly via UIManager, but this approach uses the public API.
+// We merge both: the fiber walk finds elements the grid misses (below fold),
+// the grid scan provides accurate layouts for visible elements.
 
 export async function listVisibleElements(args: { step?: number } = {}): Promise<{
   elements: VisibleElement[];
@@ -152,12 +180,12 @@ export async function listVisibleElements(args: { step?: number } = {}): Promise
   scanned: number;
 }> {
   const t0 = Date.now();
-  const step = args.step ?? 30; // px between grid points
+  const step = args.step ?? 30;
   const screen = Dimensions.get('window');
   const seen = new Map<number, VisibleElement>(); // viewTag → element
   let scanned = 0;
 
-  // Scan in a grid
+  // Strategy 1: grid scan (accurate frames for on-screen elements)
   for (let y = step; y < screen.height; y += step) {
     for (let x = step; x < screen.width; x += step) {
       scanned++;
@@ -170,6 +198,17 @@ export async function listVisibleElements(args: { step?: number } = {}): Promise
     }
   }
 
+  // Strategy 2: fiber tree walk (finds off-screen elements)
+  // This catches elements in ScrollViews that are below/above the fold.
+  try {
+    const fiberElements = walkFiberTreeForElements();
+    for (const el of fiberElements) {
+      if (el.viewTag && !seen.has(el.viewTag)) {
+        seen.set(el.viewTag, el);
+      }
+    }
+  } catch {}
+
   // Sort by y, then x (top-to-bottom, left-to-right)
   const elements = Array.from(seen.values()).sort((a, b) => {
     if (Math.abs(a.frame.y - b.frame.y) > 10) return a.frame.y - b.frame.y;
@@ -181,6 +220,62 @@ export async function listVisibleElements(args: { step?: number } = {}): Promise
     renderTimeMs: Date.now() - t0,
     scanned,
   };
+}
+
+// Walk the fiber tree directly to find ALL host components (including
+// off-screen ones in ScrollViews). Uses getAllFiberRoots() which handles
+// both Paper and Fabric + portals.
+function walkFiberTreeForElements(): VisibleElement[] {
+  const elements: VisibleElement[] = [];
+  const rootFibers = getAllFiberRoots();
+
+  for (const hostRoot of rootFibers) {
+    walkFiberForElements(hostRoot, [], elements);
+  }
+
+  return elements;
+}
+
+function walkFiberForElements(
+  fiber: any,
+  hierarchy: string[],
+  out: VisibleElement[],
+): void {
+  if (!fiber) return;
+
+  const typeName = getTypeName(fiber);
+  const newHierarchy = [...hierarchy, typeName];
+
+  // HostComponent (tag === 5) — has a native stateNode with a viewTag
+  if (fiber.tag === 5 && fiber.stateNode) {
+    let viewTag =
+      fiber.stateNode._nativeTag ||
+      fiber.stateNode.__nativeTag ||
+      fiber.stateNode.canonical?.nativeTag;
+    if (viewTag === undefined && typeof fiber.stateNode.getViewTag === 'function') {
+      try { viewTag = fiber.stateNode.getViewTag(); } catch {}
+    }
+
+    if (viewTag !== undefined && viewTag !== null) {
+      const props = sanitizeProps(fiber.memoizedProps || {});
+      const element: VisibleElement = {
+        viewTag: viewTag as number,
+        name: typeName,
+        hierarchy: newHierarchy,
+        frame: { x: 0, y: 0, width: 0, height: 0 }, // filled by grid scan if visible
+        props,
+        depth: newHierarchy.length - 1,
+      };
+      out.push(element);
+    }
+  }
+
+  // Walk children
+  let child = fiber.child;
+  while (child) {
+    walkFiberForElements(child, newHierarchy, out);
+    child = child.sibling;
+  }
 }
 
 // ─── dispatchEvent (by viewTag, not fid) ──────────────────────────────
@@ -381,33 +476,14 @@ export async function scrollToIndex(args: {
  * Walks all fiber roots, looking for host components whose stateNode has the matching nativeTag.
  */
 async function findFiberByViewTag(viewTag: number): Promise<any | null> {
-  const hook = (globalThis as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!hook) return null;
-
-  // Get all renderer IDs
-  const rendererIds: number[] = [];
-  if (hook.renderers instanceof Map) {
-    for (const id of hook.renderers.keys()) rendererIds.push(id);
+  // getAllFiberRoots() handles both Paper and Fabric — it walks
+  // hook.getFiberRoots(rendererID) for all renderers AND scans for
+  // HostPortal fibers (tag=4) to find portal roots.
+  const rootFibers = getAllFiberRoots();
+  for (const hostRoot of rootFibers) {
+    const found = findFiberByViewTagInTree(hostRoot, viewTag);
+    if (found) return found;
   }
-
-  for (const rendererID of rendererIds) {
-    let roots: any;
-    try {
-      roots = hook.getFiberRoots(rendererID);
-    } catch {
-      continue;
-    }
-    if (!roots || typeof roots.forEach !== 'function') continue;
-
-    for (const root of roots) {
-      const hostRoot = root?.current;
-      if (!hostRoot) continue;
-
-      const found = findFiberByViewTagInTree(hostRoot, viewTag);
-      if (found) return found;
-    }
-  }
-
   return null;
 }
 
@@ -416,7 +492,17 @@ function findFiberByViewTagInTree(fiber: any, viewTag: number): any | null {
 
   // Check if this fiber's host instance has the matching viewTag
   if (fiber.tag === 5 && fiber.stateNode) { // HostComponent
-    const nativeTag = fiber.stateNode._nativeTag || fiber.stateNode.__nativeTag || fiber.stateNode.getTag?.();
+    // Paper (old arch): stateNode._nativeTag
+    // Fabric (new arch): stateNode.canonical.nativeTag
+    //   OR stateNode.__nativeTag (older Fabric)
+    //   OR stateNode.getViewTag() (some versions)
+    let nativeTag =
+      fiber.stateNode._nativeTag ||
+      fiber.stateNode.__nativeTag ||
+      fiber.stateNode.canonical?.nativeTag;
+    if (nativeTag === undefined && typeof fiber.stateNode.getViewTag === 'function') {
+      try { nativeTag = fiber.stateNode.getViewTag(); } catch {}
+    }
     if (nativeTag === viewTag) return fiber;
   }
 
@@ -532,6 +618,23 @@ function sanitizeProps(props: any): Record<string, any> {
       }
     }
   }
+  // Extract text content: RN Text components store their text in props.children
+  // (string, number, or array of strings). TextInput stores it in props.value
+  // or props.text. Surface both as `text` for the agent.
+  if (out.text === undefined && out.value === undefined) {
+    const children = props.children;
+    if (typeof children === 'string' && children.length > 0) {
+      out.text = children;
+    } else if (typeof children === 'number') {
+      out.text = String(children);
+    } else if (Array.isArray(children)) {
+      // Join string/number children (skip React elements / functions)
+      const parts = children
+        .filter((c) => typeof c === 'string' || typeof c === 'number')
+        .map((c) => String(c));
+      if (parts.length > 0) out.text = parts.join('');
+    }
+  }
   return out;
 }
 
@@ -591,10 +694,242 @@ export async function diagnostics(): Promise<any> {
     hookExists: true,
     renderersCount: renderers.length,
     renderers: rendererInfo,
+    rootViewInstanceSet: rootViewInstance !== null,
+    rootViewInstanceType: rootViewInstance ? typeof rootViewInstance : 'null',
     screen: { width: screen.width, height: screen.height },
     centerProbe,
     platform: Platform.OS,
     reactNativeVersion: Platform.constants?.reactNativeVersion || 'unknown',
   };
 }
+
+// ─── swipe (synthetic gesture: pressIn → move → pressOut) ────────────
+//
+// Fires the Pressability touch sequence that simulates a swipe/drag.
+// RN's Pressability (Pressable, ScrollView, FlatList) listens to
+// onResponderGrant → onResponderMove → onResponderRelease. We synthesize
+// these via the fiber's memoizedProps handlers.
+
+export interface SwipeArgs {
+  /** Starting viewTag (swipe begins at center of this view) */
+  viewTag: number;
+  /** Relative offset from the start point. e.g. {dx: 0, dy: -200} = swipe up */
+  dx: number;
+  dy: number;
+  /** Total duration of the swipe in ms (default 250) */
+  durationMs?: number;
+  /** Number of move steps (default 10 — more = smoother) */
+  steps?: number;
+}
+
+export async function swipe(args: SwipeArgs): Promise<{ ok: boolean }> {
+  const { viewTag, dx, dy, durationMs = 250, steps = 10 } = args;
+  if (typeof viewTag !== 'number') throw Object.assign(new Error('viewTag is required'), { code: 'BAD_ARGS' });
+
+  const fiber = await findFiberByViewTag(viewTag);
+  if (!fiber) throw Object.assign(new Error(`viewTag ${viewTag} not found`), { code: 'VIEW_NOT_FOUND' });
+
+  // Find the scrollable/pressable ancestor that handles touch
+  const responderFiber = findScrollableOrPressableFiber(fiber);
+  if (!responderFiber) {
+    throw Object.assign(new Error(`No scrollable/pressable ancestor for viewTag ${viewTag}`), { code: 'NOT_SCROLLABLE' });
+  }
+
+  // Read the view's frame to compute the start point (center of the view)
+  const hostInstance = getHostInstanceForFiber(responderFiber);
+  let startX = 0, startY = 0;
+  if (hostInstance && typeof hostInstance.measureInWindow === 'function') {
+    await new Promise<void>((resolve) => {
+      try {
+        hostInstance.measureInWindow((x: number, y: number, w: number, h: number) => {
+          startX = x + w / 2;
+          startY = y + h / 2;
+          resolve();
+        });
+        setTimeout(resolve, 200);
+      } catch { resolve(); }
+    });
+  }
+
+  const props = responderFiber.memoizedProps || {};
+
+  // Synthetic touch events
+  const makeTouchEvent = (x: number, y: number, phase: 'began' | 'moved' | 'ended') => ({
+    nativeEvent: {
+      touches: [{ locationX: x, locationY: y, pageX: x, pageY: y, identifier: 1, timestamp: Date.now() }],
+      changedTouches: [{ locationX: x, locationY: y, pageX: x, pageY: y, identifier: 1, timestamp: Date.now() }],
+      locationX: x, locationY: y, pageX: x, pageY: y,
+      timestamp: Date.now(), identifier: 1, target: viewTag,
+    },
+    currentTarget: null, target: null,
+    bubbles: false, cancelable: false, defaultPrevented: false,
+    eventPhase: 0, isTrusted: false,
+    isDefaultPrevented: () => false, isPropagationStopped: () => false,
+    persist: () => {}, preventDefault: () => {}, stopPropagation: () => {},
+    timeStamp: Date.now(), type: 'touch' + phase,
+  });
+
+  // Fire pressIn
+  if (typeof props.onTouchStart === 'function') { try { props.onTouchStart(makeTouchEvent(startX, startY, 'began')); } catch {} }
+  if (typeof props.onResponderGrant === 'function') { try { props.onResponderGrant(makeTouchEvent(startX, startY, 'began')); } catch {} }
+  if (typeof props.onPressIn === 'function') { try { props.onPressIn(makeTouchEvent(startX, startY, 'began')); } catch {} }
+
+  // Fire move steps
+  const stepMs = durationMs / steps;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = startX + dx * t;
+    const y = startY + dy * t;
+    if (typeof props.onTouchMove === 'function') { try { props.onTouchMove(makeTouchEvent(x, y, 'moved')); } catch {} }
+    if (typeof props.onResponderMove === 'function') { try { props.onResponderMove(makeTouchEvent(x, y, 'moved')); } catch {} }
+    // Use setTimeout via await to space out the moves
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+
+  // Fire pressOut
+  const endX = startX + dx;
+  const endY = startY + dy;
+  if (typeof props.onTouchEnd === 'function') { try { props.onTouchEnd(makeTouchEvent(endX, endY, 'ended')); } catch {} }
+  if (typeof props.onResponderRelease === 'function') { try { props.onResponderRelease(makeTouchEvent(endX, endY, 'ended')); } catch {} }
+  if (typeof props.onPressOut === 'function') { try { props.onPressOut(makeTouchEvent(endX, endY, 'ended')); } catch {} }
+
+  return { ok: true };
+}
+
+function findScrollableOrPressableFiber(fiber: any): any | null {
+  const SCROLLABLE_TYPES = new Set([
+    'ScrollView', 'FlatList', 'SectionList', 'VirtualizedList', 'FlashList',
+    'RCTScrollView', 'KeyboardAvoidingView',
+  ]);
+  let current: any = fiber;
+  let iterations = 0;
+  while (current && iterations < 40) {
+    const typeName = current?.elementType?.displayName || current?.type?.displayName || current?.type?.name;
+    if (typeName && SCROLLABLE_TYPES.has(typeName)) return current;
+    const props = current.memoizedProps;
+    if (props && typeof props === 'object') {
+      // If it has any touch responder handlers, use it
+      if (typeof props.onResponderGrant === 'function' ||
+          typeof props.onTouchStart === 'function' ||
+          typeof props.onPressIn === 'function') {
+        return current;
+      }
+    }
+    current = current.return;
+    iterations++;
+  }
+  return null;
+}
+
+// ─── screenshot (capture the screen as base64 PNG) ───────────────────
+//
+// Uses the native captureView API. On Paper: UIManager.captureViewSnapshot.
+// On Fabric: takeSnapshot via the renderer. Falls back to a tree-based
+// "virtual screenshot" (just the inspect tree) if native capture fails.
+
+export async function screenshot(args: { viewTag?: number } = {}): Promise<{
+  ok: boolean;
+  dataUrl?: string;
+  format: string;
+  width: number;
+  height: number;
+  fallback?: string;
+}> {
+  const screen = Dimensions.get('window');
+  const targetViewTag = args.viewTag;
+
+  // Try native capture (Android/iOS)
+  try {
+    const capture = (UIManager as any)?.captureViewSnapshot;
+    if (typeof capture === 'function') {
+      const tag = targetViewTag ?? (rootViewInstance ? (findNodeHandle(rootViewInstance) as number) : null);
+      if (tag) {
+        const result = await new Promise<any>((resolve) => {
+          try {
+            capture(tag, (data: any) => resolve(data));
+          } catch (e: any) {
+            resolve({ error: e.message });
+          }
+        });
+        if (result && !result.error) {
+          return {
+            ok: true,
+            dataUrl: result.dataURL || result.uri,
+            format: 'png',
+            width: result.width || screen.width,
+            height: result.height || screen.height,
+          };
+        }
+      }
+    }
+  } catch {}
+
+  // Fallback: virtual screenshot (the inspect tree, serialized)
+  try {
+    const { elements } = await listVisibleElements({ step: 40 });
+    return {
+      ok: true,
+      format: 'tree',
+      width: screen.width,
+      height: screen.height,
+      fallback: JSON.stringify(elements.map((e: any) => ({
+        name: e.name,
+        testID: e.props?.testID,
+        text: e.props?.text,
+        frame: e.frame,
+      }))),
+    };
+  } catch (e: any) {
+    return { ok: false, format: 'error', width: 0, height: 0, fallback: e.message };
+  }
+}
+
+// ─── waitForElement (poll inspect until an element matching testID appears) ──
+
+export async function waitForElement(args: {
+  testID?: string;
+  text?: string;
+  /** Max time to wait in ms (default 5000) */
+  timeoutMs?: number;
+  /** Poll interval in ms (default 300) */
+  intervalMs?: number;
+}): Promise<{ ok: boolean; found: boolean; element?: any; waitedMs: number }> {
+  const { testID, text, timeoutMs = 5000, intervalMs = 300 } = args;
+  if (!testID && !text) throw Object.assign(new Error('testID or text is required'), { code: 'BAD_ARGS' });
+
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const { elements } = await listVisibleElements({ step: 40 });
+      const found = elements.find((e: any) => {
+        if (testID && e.props?.testID === testID) return true;
+        if (text && typeof e.props?.text === 'string' && e.props.text.includes(text)) return true;
+        return false;
+      });
+      if (found) {
+        return { ok: true, found: true, element: found, waitedMs: Date.now() - t0 };
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return { ok: true, found: false, waitedMs: Date.now() - t0 };
+}
+
+// ─── readScreen (extract all visible text as a flat list) ────────────
+
+export async function readScreen(): Promise<{
+  texts: Array<{ text: string; testID?: string; frame?: any }>;
+  count: number;
+}> {
+  const { elements } = await listVisibleElements({ step: 30 });
+  const texts: Array<{ text: string; testID?: string; frame?: any }> = [];
+  for (const e of elements) {
+    const text = e.props?.text || e.props?.value || e.props?.title;
+    if (typeof text === 'string' && text.length > 0) {
+      texts.push({ text, testID: e.props?.testID, frame: e.frame });
+    }
+  }
+  return { texts, count: texts.length };
+}
+
 

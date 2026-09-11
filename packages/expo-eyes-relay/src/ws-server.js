@@ -75,6 +75,11 @@ function startWsServer() {
       if (msg.type === 'tool-result') {
         session.resolveToolResult(msg);
       } else if (msg.type === 'event') {
+        // Log errors prominently so the agent can see runtime crashes in the relay log
+        if (msg.event === 'error') {
+          console.error(`[phone-error] ${msg.message}`);
+          if (msg.stack) console.error(`[phone-error-stack] ${msg.stack.split('\n').slice(0, 3).join('\n')}`);
+        }
         session.pushEvent(msg);
       } else {
         console.warn(`[ws] unknown message type "${msg.type}" from phone`);
@@ -84,7 +89,7 @@ function startWsServer() {
     ws.on('close', () => {
       clearTimeout(helloTimeout);
       if (authenticated) {
-        session.onPhoneDisconnected();
+        session.onPhoneDisconnected(ws);
         console.log(`[ws] phone disconnected (${ip})`);
       }
     });

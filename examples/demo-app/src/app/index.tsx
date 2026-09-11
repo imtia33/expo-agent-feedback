@@ -59,6 +59,15 @@ export default function HomeScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Navigation</Text>
         <Pressable
+          testID="go-to-playground"
+          accessibilityRole="button"
+          accessibilityLabel="Go to agent playground"
+          style={[styles.button, { backgroundColor: '#8b5cf6' }]}
+          onPress={() => router.push('/playground')}
+        >
+          <Text style={styles.buttonText}>Agent Playground →</Text>
+        </Pressable>
+        <Pressable
           testID="go-to-list"
           accessibilityRole="button"
           accessibilityLabel="Go to list screen"

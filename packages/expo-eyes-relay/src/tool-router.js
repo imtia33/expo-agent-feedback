@@ -313,6 +313,52 @@ function resetSession() {
   resetCache();
 }
 
+// ─── swipe ────────────────────────────────────────────────────────────
+
+async function swipe(phoneCall, args) {
+  const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
+  const result = await phoneCall('swipe', {
+    viewTag,
+    dx: args.dx ?? 0,
+    dy: args.dy ?? 0,
+    durationMs: args.durationMs ?? 250,
+    steps: args.steps ?? 10,
+  });
+  return { ok: result.ok };
+}
+
+// ─── screenshot ──────────────────────────────────────────────────────
+
+async function screenshot(phoneCall, args) {
+  let viewTag;
+  if (args.ref) {
+    viewTag = await resolveRefToViewTag(phoneCall, args.ref);
+  }
+  const result = await phoneCall('screenshot', viewTag ? { viewTag } : {});
+  return result;
+}
+
+// ─── waitFor ─────────────────────────────────────────────────────────
+
+async function waitFor(phoneCall, args) {
+  const result = await phoneCall('waitForElement', {
+    testID: args.testID,
+    text: args.text,
+    timeoutMs: args.timeoutMs ?? 5000,
+    intervalMs: args.intervalMs ?? 300,
+  });
+  // Invalidate the elements cache — the screen changed during the wait
+  resetCache();
+  return result;
+}
+
+// ─── readScreen ──────────────────────────────────────────────────────
+
+async function readScreen(phoneCall) {
+  const result = await phoneCall('readScreen', {});
+  return result;
+}
+
 module.exports = {
   inspect,
   snapshot,
@@ -321,5 +367,9 @@ module.exports = {
   type,
   scrollTo,
   expandList,
+  swipe,
+  screenshot,
+  waitFor,
+  readScreen,
   resetSession,
 };
