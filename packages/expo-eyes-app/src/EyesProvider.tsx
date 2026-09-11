@@ -24,7 +24,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform, findNodeHandle } from 'react-native';
 import { WSClient } from './ws-client';
 import { attachDevToolsHook } from './devtools-hook';
 import { ToolCall, ToolResult } from './protocol';
@@ -35,6 +35,7 @@ import {
   scroll,
   scrollToIndex,
   diagnostics,
+  setRootViewInstance,
 } from './primitives';
 
 export interface EyesProviderProps {
@@ -70,7 +71,32 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {
   const clientRef = useRef<WSClient | null>(null);
+  const rootViewRef = useRef<View | null>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+
+  // Capture the root view's host instance so inspectAtPoint can pass it
+  // as `inspectedView` to the renderer's getInspectorDataForViewAtPoint.
+  // On Fabric (new architecture), passing null means "no view to search
+  // within" → the native hit-test never runs → empty hierarchy.
+  // We need the actual root host instance.
+  const captureRootInstance = () => {
+    const node = rootViewRef.current;
+    if (!node) return;
+    // findNodeHandle returns the native view tag; for the inspector API we
+    // need the host instance itself. On Fabric, the ref IS the public
+    // instance (has _internalInstanceHandle). On Paper, we get the
+    // stateNode via the fiber.
+    let hostInstance: any = null;
+    try {
+      // The ref on a View gives us the host component instance directly
+      hostInstance = (node as any)._internalInstanceHandle
+        ? node  // Fabric: the ref is the public instance
+        : (node as any);  // Paper: same
+    } catch {}
+    if (hostInstance) {
+      setRootViewInstance(hostInstance);
+    }
+  };
 
   useEffect(() => {
     if (!__DEV__) return; // no-op in production
@@ -130,9 +156,13 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
 
     client.connect();
 
+    // Capture the root view instance after first render (refs are set by then).
+    captureRootInstance();
+
     return () => {
       client.close();
       clientRef.current = null;
+      setRootViewInstance(null);
     };
   }, [relayUrl, token]);
 
@@ -141,10 +171,15 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
   }
 
   return (
-    <>
+    <View
+      ref={rootViewRef as any}
+      collapsable={false}
+      style={styles.rootWrapper}
+      onLayout={captureRootInstance}
+    >
       {children}
       {showStatus && <StatusBadge status={status} />}
-    </>
+    </View>
   );
 }
 
@@ -158,6 +193,9 @@ function StatusBadge({ status }: { status: 'connecting' | 'connected' | 'disconn
 }
 
 const styles = StyleSheet.create({
+  rootWrapper: {
+    flex: 1,
+  },
   badge: {
     position: 'absolute',
     top: 50,

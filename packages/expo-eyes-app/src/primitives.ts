@@ -18,8 +18,28 @@
  *            react-native@0.86.3/src/private/devsupport/devmenu/elementinspector/
  */
 
-import { getRenderers } from './devtools-hook';
+import { getRenderers, getAllFiberRoots } from './devtools-hook';
 import { findNodeHandle, UIManager, Platform, Dimensions } from 'react-native';
+
+// ─── Root view instance (for Fabric inspector) ───────────────────────
+//
+// On Fabric (RN new architecture), getInspectorDataForViewAtPoint requires
+// a non-null `inspectedView` argument — it calls getNodeFromPublicInstance
+// on it to get the fabric node, then runs nativeFabricUIManager.findNodeAtPoint.
+// If inspectedView is null, no hit-test happens → empty hierarchy.
+//
+// The EyesProvider captures its root View ref and calls setRootViewInstance
+// so inspectAtPoint can pass it to the inspector API.
+
+let rootViewInstance: any = null;
+
+export function setRootViewInstance(instance: any): void {
+  rootViewInstance = instance;
+}
+
+export function getRootViewInstance(): any {
+  return rootViewInstance;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -55,6 +75,11 @@ export async function inspectAtPoint(args: { x: number; y: number }): Promise<In
   const t0 = Date.now();
   const renderers = getRenderers();
 
+  // On Fabric, we must pass a non-null inspectedView (the root view instance)
+  // so the renderer can resolve it to a fabric node and run the native
+  // hit-test. Without this, getInspectorDataForViewAtPoint returns empty.
+  const inspectedView = rootViewInstance;
+
   // Try each renderer — only one will have a view at this point.
   for (const renderer of renderers) {
     const inspector = renderer?.rendererConfig?.getInspectorDataForViewAtPoint;
@@ -63,7 +88,7 @@ export async function inspectAtPoint(args: { x: number; y: number }): Promise<In
     try {
       const viewData = await new Promise<any>((resolve) => {
         try {
-          inspector(null, x, y, (data: any) => {
+          inspector(inspectedView, x, y, (data: any) => {
             resolve(data);
           });
         } catch (e) {
@@ -381,33 +406,14 @@ export async function scrollToIndex(args: {
  * Walks all fiber roots, looking for host components whose stateNode has the matching nativeTag.
  */
 async function findFiberByViewTag(viewTag: number): Promise<any | null> {
-  const hook = (globalThis as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!hook) return null;
-
-  // Get all renderer IDs
-  const rendererIds: number[] = [];
-  if (hook.renderers instanceof Map) {
-    for (const id of hook.renderers.keys()) rendererIds.push(id);
+  // getAllFiberRoots() handles both Paper and Fabric — it walks
+  // hook.getFiberRoots(rendererID) for all renderers AND scans for
+  // HostPortal fibers (tag=4) to find portal roots.
+  const rootFibers = getAllFiberRoots();
+  for (const hostRoot of rootFibers) {
+    const found = findFiberByViewTagInTree(hostRoot, viewTag);
+    if (found) return found;
   }
-
-  for (const rendererID of rendererIds) {
-    let roots: any;
-    try {
-      roots = hook.getFiberRoots(rendererID);
-    } catch {
-      continue;
-    }
-    if (!roots || typeof roots.forEach !== 'function') continue;
-
-    for (const root of roots) {
-      const hostRoot = root?.current;
-      if (!hostRoot) continue;
-
-      const found = findFiberByViewTagInTree(hostRoot, viewTag);
-      if (found) return found;
-    }
-  }
-
   return null;
 }
 
@@ -416,7 +422,17 @@ function findFiberByViewTagInTree(fiber: any, viewTag: number): any | null {
 
   // Check if this fiber's host instance has the matching viewTag
   if (fiber.tag === 5 && fiber.stateNode) { // HostComponent
-    const nativeTag = fiber.stateNode._nativeTag || fiber.stateNode.__nativeTag || fiber.stateNode.getTag?.();
+    // Paper (old arch): stateNode._nativeTag
+    // Fabric (new arch): stateNode.canonical.nativeTag
+    //   OR stateNode.__nativeTag (older Fabric)
+    //   OR stateNode.getViewTag() (some versions)
+    let nativeTag =
+      fiber.stateNode._nativeTag ||
+      fiber.stateNode.__nativeTag ||
+      fiber.stateNode.canonical?.nativeTag;
+    if (nativeTag === undefined && typeof fiber.stateNode.getViewTag === 'function') {
+      try { nativeTag = fiber.stateNode.getViewTag(); } catch {}
+    }
     if (nativeTag === viewTag) return fiber;
   }
 
@@ -532,6 +548,23 @@ function sanitizeProps(props: any): Record<string, any> {
       }
     }
   }
+  // Extract text content: RN Text components store their text in props.children
+  // (string, number, or array of strings). TextInput stores it in props.value
+  // or props.text. Surface both as `text` for the agent.
+  if (out.text === undefined && out.value === undefined) {
+    const children = props.children;
+    if (typeof children === 'string' && children.length > 0) {
+      out.text = children;
+    } else if (typeof children === 'number') {
+      out.text = String(children);
+    } else if (Array.isArray(children)) {
+      // Join string/number children (skip React elements / functions)
+      const parts = children
+        .filter((c) => typeof c === 'string' || typeof c === 'number')
+        .map((c) => String(c));
+      if (parts.length > 0) out.text = parts.join('');
+    }
+  }
   return out;
 }
 
@@ -591,6 +624,8 @@ export async function diagnostics(): Promise<any> {
     hookExists: true,
     renderersCount: renderers.length,
     renderers: rendererInfo,
+    rootViewInstanceSet: rootViewInstance !== null,
+    rootViewInstanceType: rootViewInstance ? typeof rootViewInstance : 'null',
     screen: { width: screen.width, height: screen.height },
     centerProbe,
     platform: Platform.OS,

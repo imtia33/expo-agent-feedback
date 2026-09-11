@@ -58,6 +58,19 @@ class SessionManager {
   onPhoneConnected(ws, hello) {
     const sessionId = this._sessionId(hello);
     const platform = this._platformFromHello(hello);
+
+    // Dedupe by platform: if a phone of the same platform is already
+    // connected, close the old connection. This prevents zombie buildup
+    // from Expo Go reconnecting (HMR, reload) or the web preview re-opening.
+    // We keep only the LATEST connection per platform.
+    for (const [existingId, entry] of this.phones.entries()) {
+      if (entry.platform === platform && entry.ws !== ws) {
+        try { entry.ws.close(4000, 'replaced by newer connection'); } catch {}
+        this.phones.delete(existingId);
+        this._log('phone-replaced', { oldSession: existingId, newSession: sessionId, platform });
+      }
+    }
+
     this.phones.set(sessionId, { ws, hello, platform, connectedAt: Date.now() });
     this._notifyListeners('phone-connected', { info: hello, sessionId, platform });
     this._log('phone-connected', { sessionId, platform, app: hello.app });
@@ -99,8 +112,24 @@ class SessionManager {
   /**
    * Pick the "active" phone — prefer native (ios/android) over web.
    * Returns { sessionId, ws, hello, platform } or null.
+   *
+   * Also prunes dead connections (readyState != OPEN) as it scans.
    */
   getActivePhone() {
+    if (this.phones.size === 0) return null;
+
+    // Prune dead connections first
+    const dead = [];
+    for (const [sessionId, entry] of this.phones.entries()) {
+      if (entry.ws.readyState !== 1) { // not OPEN
+        dead.push(sessionId);
+      }
+    }
+    for (const id of dead) {
+      this.phones.delete(id);
+      this._log('phone-pruned-dead', { sessionId: id });
+    }
+
     if (this.phones.size === 0) return null;
 
     // Preference order: ios, android, native, then anything else (web last)
