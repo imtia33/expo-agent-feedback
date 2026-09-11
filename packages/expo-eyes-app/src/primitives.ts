@@ -547,3 +547,54 @@ function extractTestIDFromHierarchy(hierarchy: any[]): string | undefined {
   }
   return undefined;
 }
+
+// ─── diagnostics ──────────────────────────────────────────────────────
+//
+// Returns info about what the phone SDK actually sees — used to debug
+// why inspectAtPoint returns nothing.
+
+export async function diagnostics(): Promise<any> {
+  const hook = (globalThis as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!hook) {
+    return { error: '__REACT_DEVTOOLS_GLOBAL_HOOK__ not found' };
+  }
+
+  const renderers = getRenderers();
+  const rendererInfo = renderers.map((r: any, i: number) => ({
+    index: i,
+    hasRendererConfig: !!r?.rendererConfig,
+    hasGetInspectorDataForViewAtPoint: typeof r?.rendererConfig?.getInspectorDataForViewAtPoint === 'function',
+    rendererConfigKeys: r?.rendererConfig ? Object.keys(r.rendererConfig) : [],
+    rendererType: typeof r,
+  }));
+
+  // Try one inspectAtPoint call at screen center
+  const screen = Dimensions.get('window');
+  const centerX = Math.floor(screen.width / 2);
+  const centerY = Math.floor(screen.height / 2);
+
+  let centerProbe: any = null;
+  try {
+    const result = await inspectAtPoint({ x: centerX, y: centerY });
+    centerProbe = {
+      x: centerX,
+      y: centerY,
+      foundElement: !!result.element,
+      hierarchyLength: result.hierarchy.length,
+      firstHierarchyItem: result.hierarchy[0] || null,
+    };
+  } catch (e: any) {
+    centerProbe = { error: e.message };
+  }
+
+  return {
+    hookExists: true,
+    renderersCount: renderers.length,
+    renderers: rendererInfo,
+    screen: { width: screen.width, height: screen.height },
+    centerProbe,
+    platform: Platform.OS,
+    reactNativeVersion: Platform.constants?.reactNativeVersion || 'unknown',
+  };
+}
+

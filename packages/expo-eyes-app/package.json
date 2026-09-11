@@ -1,6 +1,6 @@
 {
   "name": "expo-eyes-app",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Eyes and fingers for AI agents on Expo apps — in-app SDK (pure JS, works in Expo Go)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -85,8 +85,8 @@ const TOOL_SCHEMAS = {
 };
 
 function authMiddleware(req, res, next) {
-  // /, /health and /status are exempt
-  if (req.path === '/' || req.path === '/health' || req.path === '/status') {
+  // /, /health, /status, /diagnostics are exempt (diagnostics is read-only)
+  if (req.path === '/' || req.path === '/health' || req.path === '/status' || req.path === '/diagnostics') {
     return next();
   }
   // If no token is configured, skip auth (open relay, LAN-only mode).
@@ -139,6 +139,16 @@ function startHttpServer() {
       appUrl: session.appUrl || null,
       phone: session.getStatus(),
     });
+  });
+
+  // ─── Diagnostics (calls the phone's diagnostics primitive directly) ──
+  app.get('/diagnostics', async (_req, res) => {
+    try {
+      const result = await session.callTool('diagnostics', {});
+      res.json({ ok: true, diagnostics: result });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: { code: e.code || 'ERROR', message: e.message } });
+    }
   });
 
   app.get('/status', (_req, res) => {

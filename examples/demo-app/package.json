@@ -20,7 +20,7 @@
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
-    "expo-eyes-app": "https://github.com/imtia33/expo-feedback-Agent/raw/main/releases/expo-eyes-app-0.2.0.tgz"
+    "expo-eyes-app": "https://github.com/imtia33/expo-feedback-Agent/raw/main/releases/expo-eyes-app-0.2.1.tgz"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",

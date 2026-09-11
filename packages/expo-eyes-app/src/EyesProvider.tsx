@@ -34,6 +34,7 @@ import {
   dispatchEvent,
   scroll,
   scrollToIndex,
+  diagnostics,
 } from './primitives';
 
 export interface EyesProviderProps {
@@ -55,6 +56,7 @@ const PRIMITIVES = new Set([
   'dispatchEvent',
   'scroll',
   'scrollToIndex',
+  'diagnostics',
 ]);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
@@ -63,6 +65,7 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   dispatchEvent,
   scroll,
   scrollToIndex,
+  diagnostics,
 };
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {
