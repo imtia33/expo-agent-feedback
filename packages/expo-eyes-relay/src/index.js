@@ -140,8 +140,11 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[relay] ${signal} received, shutting down...`);
-    if (session.phoneWs) {
-      try { session.phoneWs.close(1001, 'server shutdown'); } catch {}
+    // Close all connected phones
+    if (session.phones instanceof Map) {
+      for (const [, entry] of session.phones.entries()) {
+        try { entry.ws.close(1001, 'server shutdown'); } catch {}
+      }
     }
     killAll(); // kill tunnel processes
     setTimeout(() => process.exit(0), 500).unref();

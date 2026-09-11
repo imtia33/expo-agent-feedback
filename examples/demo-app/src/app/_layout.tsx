@@ -4,43 +4,56 @@ import { Platform } from 'react-native';
 import { EyesProvider } from 'expo-eyes-app';
 
 /**
- * Relay URL resolution.
+ * Relay URL resolution — works for BOTH web preview AND Expo Go on a phone.
  *
- * Three modes:
+ * The key insight: when tunneling through the sandbox gateway, BOTH the app
+ * bundle AND the relay WS must be reachable via the public domain. The app
+ * bundle comes through `https://<public-host>/` (Expo dev server, proxied).
+ * The relay WS comes through `wss://<public-host>/?XTransformPort=8766`
+ * (the gateway routes ?XTransformPort=8766 → localhost:8766 = relay WS).
+ *
+ * Modes:
  *  1. EXPO_PUBLIC_RELAY_URL is an explicit ws://host:port → use it directly
- *     (for real-device testing on LAN).
- *  2. EXPO_PUBLIC_RELAY_URL is "auto" or unset → derive from window.location
- *     so the WS goes through the sandbox gateway (Caddy) using the
- *     ?XTransformPort=<port> query. This makes the relay reachable from the
- *     preview panel without any third-party tunnel.
- *  3. On native (Expo Go on a phone) with no env → fall back to
- *     ws://localhost:8766 (developer's machine on LAN — override via env).
+ *     (for real-device LAN testing where the phone is on the same network
+ *     as the relay).
+ *  2. EXPO_PUBLIC_RELAY_URL is "auto" (recommended for sandbox):
+ *     - On web: derive from window.location.host (the browser's public URL).
+ *     - On native (Expo Go): use EXPO_PUBLIC_PUBLIC_HOST env var to build
+ *       the tunneled WS URL. This is necessary because native has no
+ *       window.location — the app doesn't know its own public URL.
+ *  3. Fallback: ws://localhost:8766 (only works when the phone is on LAN
+ *     with the relay — NOT the sandbox case).
+ *
+ * REQUIRED ENV VARS for sandbox + Expo Go:
+ *   EXPO_PUBLIC_RELAY_URL=auto
+ *   EXPO_PUBLIC_PUBLIC_HOST=preview-chat-<chat-id>.space-z.ai
+ *   EXPO_PUBLIC_EYES_TOKEN=ultron123
  */
 const ENV_RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL;
+const ENV_PUBLIC_HOST = process.env.EXPO_PUBLIC_PUBLIC_HOST;
 const TOKEN = process.env.EXPO_PUBLIC_EYES_TOKEN || 'ultron123';
+const RELAY_WS_PORT = 8766;
 
 function resolveRelayUrl(): string {
-  // Mode 1: explicit URL
+  // Mode 1: explicit ws:// URL (LAN testing)
   if (ENV_RELAY_URL && ENV_RELAY_URL !== 'auto' && ENV_RELAY_URL.startsWith('ws')) {
     return ENV_RELAY_URL;
   }
 
-  // Mode 3: native fallback
-  if (Platform.OS !== 'web') {
-    return ENV_RELAY_URL && ENV_RELAY_URL !== 'auto'
-      ? ENV_RELAY_URL
-      : 'ws://localhost:8766';
-  }
-
-  // Mode 2: web — derive from window.location, route WS through the gateway
-  // using ?XTransformPort=8766 (the sandbox Caddy reverse-proxy).
-  if (typeof window !== 'undefined' && window.location) {
-    const host = window.location.host; // e.g. preview.example.com:81
+  // Mode 2a: web preview — derive from window.location
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
+    const host = window.location.host; // e.g. preview-chat-xxx.space-z.ai
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    // The Caddy gateway routes ws://host/?XTransformPort=8766 → localhost:8766
-    return `${proto}://${host}/?XTransformPort=8766`;
+    return `${proto}://${host}/?XTransformPort=${RELAY_WS_PORT}`;
   }
 
+  // Mode 2b: native (Expo Go) — use the public host from env, tunnel WS
+  // through the gateway via ?XTransformPort=8766.
+  if (ENV_PUBLIC_HOST) {
+    return `wss://${ENV_PUBLIC_HOST}/?XTransformPort=${RELAY_WS_PORT}`;
+  }
+
+  // Mode 3: fallback (LAN only — phone on same network as relay)
   return 'ws://localhost:8766';
 }
 

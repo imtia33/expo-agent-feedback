@@ -84,7 +84,7 @@ function startWsServer() {
     ws.on('close', () => {
       clearTimeout(helloTimeout);
       if (authenticated) {
-        session.onPhoneDisconnected();
+        session.onPhoneDisconnected(ws);
         console.log(`[ws] phone disconnected (${ip})`);
       }
     });
