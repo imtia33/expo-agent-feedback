@@ -105,6 +105,30 @@ export function getHookRef(): DevToolsHook | null {
   return getHook();
 }
 
+/**
+ * Return all registered React renderers.
+ *
+ * Each renderer has `rendererConfig.getInspectorDataForViewAtPoint()` —
+ * the same API RN's own Element Inspector uses. Returns a flat hierarchy
+ * array, not a deep tree. No Hermes depth issues.
+ *
+ * Verified against react-native@0.86.3/src/private/devsupport/devmenu/
+ * elementinspector/getInspectorDataForViewAtPoint.js
+ * (see docs/libraries/rn-element-inspector-API.md).
+ */
+export function getRenderers(): any[] {
+  const hook = getHook();
+  if (!hook) return [];
+  const renderers: any[] = [];
+  // hook.renderers is a Map<number, ReactRenderer>
+  if (hook.renderers instanceof Map) {
+    for (const renderer of hook.renderers.values()) {
+      renderers.push(renderer);
+    }
+  }
+  return renderers;
+}
+
 // Fiber tag for portal fibers (React source: ReactWorkTags.js)
 const HOST_PORTAL_TAG = 4;
 

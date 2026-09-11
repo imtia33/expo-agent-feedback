@@ -1,375 +1,260 @@
 /**
- * Tool router — implements agent-facing tools using app-side primitives.
+ * Tool router — implements agent-facing tools using the new RN inspector API.
  *
- * This is the "brain" of expo-eyes. All computation lives here:
- *   - ref allocation (r0, r1, ...)
- *   - stableId hashing
- *   - tree pruning
- *   - snapshot drill-in
- *   - tap resolution
- *   - scrollable ancestor search
- *   - virtualization detection
+ * Agent tools (unchanged from outside):
+ *   inspect, snapshot, tap, longPress, type, scrollTo, expandList
  *
- * The app SDK exposes only: getTree, dispatchEvent, readLayout, scroll,
- * scrollToIndex. We compose those into the agent-facing tools.
+ * Phone primitives (new, flat — no deep tree):
+ *   inspectAtPoint({x,y})    → element at a screen point
+ *   listVisibleElements()    → flat list of visible elements
+ *   dispatchEvent(viewTag, event, ...)  → fire onPress/etc.
+ *   scroll(viewTag, x, y)    → scrollTo
+ *   scrollToIndex(viewTag, n) → scrollToIndex
+ *
+ * The relay caches the listVisibleElements result so tap/type/etc can resolve
+ * viewTags without re-scanning the screen.
  */
-
-// ─── Ref allocation ───────────────────────────────────────────────────
-
-const fidToRef = new Map();
-const fidToStableId = new Map();
-let refCounter = 0;
-
-function resetRefs() {
-  fidToRef.clear();
-  refCounter = 0;
-  // Don't clear stableId cache — it's deterministic per fid
-}
-
-function refForFid(fid) {
-  let ref = fidToRef.get(fid);
-  if (!ref) {
-    ref = `r${refCounter++}`;
-    fidToRef.set(fid, ref);
-  }
-  return ref;
-}
-
-// ─── stableId computation ─────────────────────────────────────────────
-
-function fnv1aHash(str) {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    hash ^= str.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36).padStart(6, '0').slice(-6);
-}
-
-const VIRTUALIZED_TYPES = new Set([
-  'FlatList', 'SectionList', 'VirtualizedList', 'FlashList', 'MasonryFlashList',
-]);
-
-const MAX_DEPTH = 50;
-const MAX_NODES = 500;
-
-// Wrapper types that don't count toward depth — they're React Context providers
-// and navigation infrastructure that Expo Router / React Navigation inject.
-// Skipping them lets us reach the actual screen content without bloating the
-// agent's context with 30 levels of providers.
-const TRANSPARENT_WRAPPER_TYPES = new Set([
-  'Unknown',  // Anonymous context providers
-  'LocaleDirContext',
-  'UnhandledLinkingContext',
-  'LinkingContext',
-  'BaseNavigationContainer',
-  'EnsureSingleNavigator',
-  'ThemeProvider',
-  'ThemeContext',
-  'NavigationContainerRefContext',
-  'Route prop',
-  'CurrentRenderContext',
-  'PreventEmptyStack',
-  'StackNavigator',
-  'StackView',
-  'SceneView',
-  'NavigationBuilderContext',
-  'NavigationStateContext',
-  'WithContext',
-  'withDevTools',
-  'AppContainer',
-  'RootTagContext',
-  'main(RootComponent)',
-  'DebuggingOverlay',
-  'LogBoxStateSubscription',
-  'LogBoxNotificationContainer',
-  'ExpoRoot',
-  'ContextNavigator',
-  'App',
-  'RootComponent',
-  'ReactNativeFiberHostComponent',
-]);
 
 // ─── Session state ────────────────────────────────────────────────────
 
-let lastRawTree = null;
-let lastTreeFetchAt = 0;
+let cachedElements = null; // result of last listVisibleElements
+let cacheExpiry = 0;
+const CACHE_TTL_MS = 2000; // 2 seconds
 
-async function fetchTree(phoneCall, force) {
+function resetCache() {
+  cachedElements = null;
+  cacheExpiry = 0;
+}
+
+async function fetchElements(phoneCall, force = false) {
   const now = Date.now();
-  if (!force && lastRawTree && now - lastTreeFetchAt < 1000) {
-    return lastRawTree;
+  if (!force && cachedElements && now < cacheExpiry) {
+    return cachedElements;
   }
-  const res = await phoneCall('getTree', {});
-  // session.callTool resolves with { ...result, refsStillValid, durationMs }
-  // So the phone's result fields are at the top level of res.
-  lastRawTree = res.tree;
-  lastTreeFetchAt = now;
-  return lastRawTree;
+  const res = await phoneCall('listVisibleElements', {});
+  cachedElements = res.elements || [];
+  cacheExpiry = now + CACHE_TTL_MS;
+  return cachedElements;
+}
+
+/**
+ * Find an element by ref (positional like "r5") or stableId (testID-based).
+ * Returns the viewTag.
+ */
+async function resolveRefToViewTag(phoneCall, ref) {
+  const elements = await fetchElements(phoneCall);
+
+  // Positional ref: "r5" → index 5
+  if (typeof ref === 'string' && ref.startsWith('r') && /^r\d+$/.test(ref)) {
+    const idx = parseInt(ref.slice(1), 10);
+    if (idx >= 0 && idx < elements.length) {
+      return elements[idx].viewTag;
+    }
+    throw Object.assign(new Error(`ref "${ref}" out of range (have ${elements.length} elements)`), { code: 'REF_NOT_FOUND' });
+  }
+
+  // StableId: "tid:saveBtn" → find by testID
+  if (typeof ref === 'string' && ref.startsWith('tid:')) {
+    const testID = ref.slice(4);
+    const found = elements.find((e) => e.props?.testID === testID);
+    if (found) return found.viewTag;
+    throw Object.assign(new Error(`testID "${testID}" not found`), { code: 'REF_NOT_FOUND' });
+  }
+
+  // StableId: "h:xxxxxx" → find by structural hash (currently same as name-based lookup)
+  if (typeof ref === 'string' && ref.startsWith('h:')) {
+    // For now, we don't compute structural hashes in this version.
+    // Fall through to name-based lookup.
+  }
+
+  // By name (case-insensitive substring match)
+  if (typeof ref === 'string') {
+    const lower = ref.toLowerCase();
+    const found = elements.find((e) => e.name?.toLowerCase().includes(lower));
+    if (found) return found.viewTag;
+  }
+
+  throw Object.assign(new Error(`ref "${ref}" not found. Call inspect() to see available elements.`), { code: 'REF_NOT_FOUND' });
 }
 
 // ─── inspect ──────────────────────────────────────────────────────────
 
 async function inspect(phoneCall) {
   const t0 = Date.now();
-  const raw = await fetchTree(phoneCall, true);
-  resetRefs();
+  const elements = await fetchElements(phoneCall, true);
 
-  const stats = { emitted: 0, pruned: 0 };
-  const tree = raw ? pruneTree(raw, 0, stats) : null;
+  // Build a tree-like structure from the flat list.
+  // Each element has a hierarchy array (names from root → this element).
+  // We group by depth and parent to reconstruct a tree.
+  const tree = buildTreeFromFlatList(elements);
 
   return {
     tree,
-    totalNodes: stats.emitted,
-    prunedNodes: stats.pruned,
+    totalNodes: elements.length,
+    prunedNodes: 0,
     renderTimeMs: Date.now() - t0,
   };
 }
 
-function pruneTree(node, depth, stats) {
-  if (!node) return null;
-  if (depth > MAX_DEPTH) { stats.pruned++; return null; }
-  if (stats.emitted >= MAX_NODES) { stats.pruned++; return null; }
+function buildTreeFromFlatList(elements) {
+  // The flat list is sorted by y, then x. We build a tree by matching
+  // hierarchy arrays — an element is a child of the previous element
+  // whose hierarchy is a prefix of this one.
+  if (elements.length === 0) return null;
 
-  // Transparent wrappers: skip rendering this node, but recurse into its
-  // children directly. This collapses the 30-level React Context / Expo
-  // Router infrastructure into the actual screen content.
-  if (TRANSPARENT_WRAPPER_TYPES.has(node.type)) {
-    // If this wrapper has exactly one child, return the pruned child directly
-    // (transparent pass-through).
-    const children = node.children || [];
-    if (children.length === 1) {
-      return pruneTree(children[0], depth, stats);  // same depth, don't increment
-    }
-    // Multiple children or none — render this node normally but don't bump depth
-  }
-
-  stats.emitted++;
-  const ref = refForFid(node.fid);
-  const stableId = stableIdForFid(node);
-
-  const agentNode = {
-    ref,
-    stableId,
-    type: node.type,
+  // Assign positional refs (r0, r1, ...)
+  const withRefs = elements.map((e, i) => ({
+    ref: `r${i}`,
+    stableId: e.props?.testID ? `tid:${e.props.testID}` : undefined,
+    type: e.name,
+    name: e.name,
+    text: e.props?.text || e.props?.value || e.props?.title,
+    testID: e.props?.testID,
+    role: e.props?.accessibilityRole,
+    label: e.props?.accessibilityLabel,
+    layout: e.frame,
+    state: extractState(e.props),
+    viewTag: e.viewTag,
+    depth: e.depth,
     children: [],
-  };
+  }));
 
-  if (node.name) agentNode.name = node.name;
-  if (node.text) agentNode.text = node.text;
-  if (node.testID) agentNode.testID = node.testID;
-  if (node.role) agentNode.role = node.role;
-  if (node.label) agentNode.label = node.label;
-  if (node.layout) agentNode.layout = node.layout;
-  if (node.state) agentNode.state = node.state;
+  // Build tree by hierarchy depth
+  const root = withRefs[0];
+  const stack = [root];
 
-  if (VIRTUALIZED_TYPES.has(node.type)) {
-    agentNode.virtualized = true;
-    const data = node.props?.data;
-    if (Array.isArray(data)) {
-      agentNode.itemCount = data.length;
+  for (let i = 1; i < withRefs.length; i++) {
+    const el = withRefs[i];
+
+    // Pop stack until we find a parent (depth < this element's depth)
+    while (stack.length > 0 && stack[stack.length - 1].depth >= el.depth) {
+      stack.pop();
     }
-    const rendered = (node.children || []).length;
-    if (agentNode.itemCount && rendered < agentNode.itemCount) {
-      agentNode.renderedRange = [0, Math.max(0, rendered - 1)];
+
+    if (stack.length === 0) {
+      // Sibling of root — attach to root
+      root.children.push(el);
+    } else {
+      stack[stack.length - 1].children.push(el);
     }
+    stack.push(el);
   }
 
-  for (const child of (node.children || [])) {
-    const childNode = pruneTree(child, depth + 1, stats);
-    if (childNode) {
-      agentNode.children.push(childNode);
-    } else if (stats.emitted >= MAX_NODES) {
-      agentNode.truncated = true;
-      break;
-    }
-  }
-
-  return agentNode;
+  return root;
 }
 
-// ─── stableId ─────────────────────────────────────────────────────────
-
-function stableIdForFid(node) {
-  if (!node) return undefined;
-
-  const cached = fidToStableId.get(node.fid);
-  if (cached) return cached;
-
-  if (node.testID) {
-    const id = `tid:${node.testID}`;
-    fidToStableId.set(node.fid, id);
-    return id;
-  }
-
-  const path = buildPathFromRoot(node);
-  const id = 'h:' + fnv1aHash(path);
-  fidToStableId.set(node.fid, id);
-  return id;
-}
-
-function buildPathFromRoot(node) {
-  const parts = [node.type];
-  if (node.label) parts.push(`:${node.label}`);
-  else if (node.text && node.text.length < 50) parts.push(`:${node.text}`);
-  else if (node.props?.placeholder) parts.push(`:${node.props.placeholder}`);
-  return parts.join('');
+function extractState(props) {
+  if (!props) return undefined;
+  const state = {};
+  if (props.disabled === true) state.disabled = true;
+  if (typeof props.checked === 'boolean') state.checked = props.checked;
+  if (typeof props.value === 'boolean') state.checked = props.value;
+  if (props.selected === true) state.selected = true;
+  if (Object.keys(state).length === 0) return undefined;
+  return state;
 }
 
 // ─── snapshot ─────────────────────────────────────────────────────────
+//
+// With the new flat-list approach, "snapshot" is the same as inspect —
+// we return the element + its position in the hierarchy. No deep tree to drill into.
 
 async function snapshot(phoneCall, args) {
   const t0 = Date.now();
-  const raw = await fetchTree(phoneCall, true);
-  resetRefs();
+  const elements = await fetchElements(phoneCall, true);
 
-  const stats = { emitted: 0, pruned: 0 };
-  const pruned = raw ? pruneTree(raw, 0, stats) : null;
-  if (!pruned) throw Object.assign(new Error('Empty tree'), { code: 'EMPTY_TREE' });
+  // Find the element by ref
+  let target = null;
+  let targetIndex = -1;
 
-  const target = findInAgentTree(pruned, args.ref);
+  // Positional ref
+  if (typeof args.ref === 'string' && args.ref.startsWith('r') && /^r\d+$/.test(args.ref)) {
+    const idx = parseInt(args.ref.slice(1), 10);
+    if (idx >= 0 && idx < elements.length) {
+      target = elements[idx];
+      targetIndex = idx;
+    }
+  }
+
+  // testID
+  if (!target && typeof args.ref === 'string' && args.ref.startsWith('tid:')) {
+    const testID = args.ref.slice(4);
+    targetIndex = elements.findIndex((e) => e.props?.testID === testID);
+    if (targetIndex >= 0) target = elements[targetIndex];
+  }
+
+  // Name match
+  if (!target && typeof args.ref === 'string') {
+    const lower = args.ref.toLowerCase();
+    targetIndex = elements.findIndex((e) => e.name?.toLowerCase().includes(lower));
+    if (targetIndex >= 0) target = elements[targetIndex];
+  }
+
   if (!target) {
-    throw Object.assign(
-      new Error(`ref "${args.ref}" not found — call inspect() to refresh.`),
-      { code: 'REF_NOT_FOUND' },
-    );
+    throw Object.assign(new Error(`ref "${args.ref}" not found`), { code: 'REF_NOT_FOUND' });
   }
 
-  const rawTarget = findInRawTree(raw, target);
-  if (!rawTarget) {
-    return { element: target, renderTimeMs: Date.now() - t0 };
-  }
-
-  const deepStats = { emitted: 0, pruned: 0 };
-  const deep = deepPrune(rawTarget, 0, deepStats);
-  return { element: deep || target, renderTimeMs: Date.now() - t0 };
-}
-
-function findInAgentTree(node, ref) {
-  if (!node) return null;
-  if (node.ref === ref || node.stableId === ref) return node;
-  for (const child of node.children) {
-    const found = findInAgentTree(child, ref);
-    if (found) return found;
-  }
-  return null;
-}
-
-function findInRawTree(root, agentNode) {
-  let targetFid = null;
-  for (const [fid, ref] of fidToRef.entries()) {
-    if (ref === agentNode.ref) { targetFid = fid; break; }
-  }
-  if (targetFid === null) return null;
-
-  function walk(node) {
-    if (!node) return null;
-    if (node.fid === targetFid) return node;
-    for (const child of (node.children || [])) {
-      const found = walk(child);
-      if (found) return found;
-    }
-    return null;
-  }
-  return walk(root);
-}
-
-function deepPrune(node, depth, stats) {
-  if (!node) return null;
-  if (depth > 50) { stats.pruned++; return null; }
-  if (stats.emitted >= 500) { stats.pruned++; return null; }
-
-  // Transparent wrappers: same logic as pruneTree — pass through single-child
-  // wrappers without bumping depth.
-  if (TRANSPARENT_WRAPPER_TYPES.has(node.type)) {
-    const children = node.children || [];
-    if (children.length === 1) {
-      return deepPrune(children[0], depth, stats);
-    }
-  }
-
-  stats.emitted++;
-
-  const ref = refForFid(node.fid);
-  const stableId = stableIdForFid(node);
-
-  const agentNode = {
-    ref, stableId, type: node.type, children: [],
+  return {
+    element: {
+      ref: `r${targetIndex}`,
+      stableId: target.props?.testID ? `tid:${target.props.testID}` : undefined,
+      type: target.name,
+      name: target.name,
+      text: target.props?.text || target.props?.value || target.props?.title,
+      testID: target.props?.testID,
+      role: target.props?.accessibilityRole,
+      label: target.props?.accessibilityLabel,
+      layout: target.frame,
+      state: extractState(target.props),
+      props: target.props,
+      hierarchy: target.hierarchy,
+      viewTag: target.viewTag,
+      children: [],
+    },
+    renderTimeMs: Date.now() - t0,
   };
-
-  if (node.name) agentNode.name = node.name;
-  if (node.text) agentNode.text = node.text;
-  if (node.testID) agentNode.testID = node.testID;
-  if (node.role) agentNode.role = node.role;
-  if (node.label) agentNode.label = node.label;
-  if (node.layout) agentNode.layout = node.layout;
-  if (node.state) agentNode.state = node.state;
-  if (node.props) agentNode.props = node.props;
-
-  if (VIRTUALIZED_TYPES.has(node.type)) {
-    agentNode.virtualized = true;
-    const data = node.props?.data;
-    if (Array.isArray(data)) agentNode.itemCount = data.length;
-  }
-
-  for (const child of (node.children || [])) {
-    const childNode = deepPrune(child, depth + 1, stats);
-    if (childNode) agentNode.children.push(childNode);
-    else { agentNode.truncated = true; break; }
-  }
-
-  return agentNode;
 }
 
 // ─── tap / longPress ──────────────────────────────────────────────────
 
 async function tap(phoneCall, args) {
-  const fid = await resolveRefToFid(phoneCall, args.ref);
-  if (fid === null) {
-    throw Object.assign(new Error(`ref "${args.ref}" not found`), { code: 'REF_NOT_FOUND' });
-  }
-  await phoneCall('dispatchEvent', { fid, event: 'press' });
+  const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
+  await phoneCall('dispatchEvent', { viewTag, event: 'press' });
   return { ok: true };
 }
 
 async function longPress(phoneCall, args) {
-  const fid = await resolveRefToFid(phoneCall, args.ref);
-  if (fid === null) {
-    throw Object.assign(new Error(`ref "${args.ref}" not found`), { code: 'REF_NOT_FOUND' });
-  }
+  const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
   const durationMs = args.durationMs ?? 500;
   await sleep(durationMs);
-  await phoneCall('dispatchEvent', { fid, event: 'longPress', durationMs });
+  await phoneCall('dispatchEvent', { viewTag, event: 'longPress', durationMs });
   return { ok: true };
 }
 
 // ─── type ─────────────────────────────────────────────────────────────
 
 async function type(phoneCall, args) {
-  const fid = await resolveRefToFid(phoneCall, args.ref);
-  if (fid === null) {
-    throw Object.assign(new Error(`ref "${args.ref}" not found`), { code: 'REF_NOT_FOUND' });
-  }
+  const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
 
+  // For append mode, we'd need to read the current value first.
+  // For now, just set the new value (replace mode).
   let newValue = args.text;
   if (args.append) {
-    const tree = await fetchTree(phoneCall, true);
-    const node = findFidInRawTree(tree, fid);
-    const current = node?.props?.value ?? node?.text ?? '';
+    // Find the current value from cached elements
+    const elements = await fetchElements(phoneCall);
+    const el = elements.find((e) => e.viewTag === viewTag);
+    const current = el?.props?.value || el?.props?.text || '';
     newValue = current + args.text;
   }
 
-  await phoneCall('dispatchEvent', { fid, event: 'changeText', text: newValue });
+  await phoneCall('dispatchEvent', { viewTag, event: 'changeText', text: newValue });
   return { ok: true, newValue };
 }
 
 // ─── scrollTo ─────────────────────────────────────────────────────────
 
 async function scrollTo(phoneCall, args) {
-  const fid = await resolveRefToFid(phoneCall, args.ref);
-  if (fid === null) {
-    throw Object.assign(new Error(`ref "${args.ref}" not found`), { code: 'REF_NOT_FOUND' });
-  }
+  const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
 
   let x = args.x ?? 0;
   let y = args.y ?? 0;
@@ -382,7 +267,7 @@ async function scrollTo(phoneCall, args) {
     }
   }
 
-  const res = await phoneCall('scroll', { fid, x, y, animated: args.animated ?? true });
+  const res = await phoneCall('scroll', { viewTag, x, y, animated: args.animated ?? true });
   return { ok: true, scrolledTo: res.scrolledTo };
 }
 
@@ -393,109 +278,39 @@ async function expandList(phoneCall, args) {
   const from = args.from ?? 0;
   const to = args.to ?? from + 14;
 
-  const fid = await resolveRefToFid(phoneCall, args.listRef);
-  if (fid === null) {
-    throw Object.assign(new Error(`listRef "${args.listRef}" not found`), { code: 'REF_NOT_FOUND' });
-  }
-
-  await phoneCall('scrollToIndex', { fid, index: from, animated: false });
+  const viewTag = await resolveRefToViewTag(phoneCall, args.listRef);
+  await phoneCall('scrollToIndex', { viewTag, index: from, animated: false });
   await sleep(200);
 
-  const raw = await fetchTree(phoneCall, true);
-  resetRefs();
-  const listNode = findFidInRawTree(raw, fid);
-  if (!listNode) {
-    throw Object.assign(new Error(`List fid ${fid} not in tree after scroll`), { code: 'REF_NOT_FOUND' });
-  }
+  // Re-fetch elements after scroll
+  const elements = await fetchElements(phoneCall, true);
 
-  const itemCount = listNode.props?.data?.length ?? listNode.children?.length ?? 0;
-  const stats = { emitted: 0, pruned: 0 };
-  const items = [];
-  for (const child of (listNode.children || [])) {
-    const item = deepPrune(child, 0, stats);
-    if (item) items.push(item);
-  }
-
+  // Filter to list items (elements whose name matches 'Item' or are inside the list)
+  // For now, return all elements — the agent can filter.
   return {
-    items,
-    renderedRange: [from, from + items.length - 1],
-    itemCount,
+    items: elements.map((e, i) => ({
+      ref: `r${i}`,
+      stableId: e.props?.testID ? `tid:${e.props.testID}` : undefined,
+      type: e.name,
+      name: e.name,
+      text: e.props?.text || e.props?.value,
+      testID: e.props?.testID,
+      layout: e.frame,
+    })),
+    renderedRange: [from, from + elements.length - 1],
+    itemCount: elements.length,
     renderTimeMs: Date.now() - t0,
   };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-async function resolveRefToFid(phoneCall, ref) {
-  // Try the cached mapping first
-  for (const [fid, cachedRef] of fidToRef.entries()) {
-    if (cachedRef === ref) return fid;
-  }
-
-  // Ref might be a stableId — fetch tree and find by stableId
-  const tree = await fetchTree(phoneCall, true);
-  resetRefs();
-
-  const stats = { emitted: 0, pruned: 0 };
-  if (tree) pruneTree(tree, 0, stats);
-
-  // Try positional ref
-  for (const [fid, cachedRef] of fidToRef.entries()) {
-    if (cachedRef === ref) return fid;
-  }
-
-  // Try stableId
-  const found = findFidByStableIdInRawTree(tree, ref);
-  return found;
-}
-
-function findFidByStableIdInRawTree(node, stableId) {
-  if (!node) return null;
-
-  if (stableId.startsWith('tid:')) {
-    const targetTestId = stableId.slice(4);
-    if (node.testID === targetTestId) return node.fid;
-  }
-
-  if (stableId.startsWith('h:')) {
-    const computed = computeStableIdForRawNode(node);
-    if (computed === stableId) return node.fid;
-  }
-
-  for (const child of (node.children || [])) {
-    const found = findFidByStableIdInRawTree(child, stableId);
-    if (found !== null) return found;
-  }
-  return null;
-}
-
-function computeStableIdForRawNode(node) {
-  if (node.testID) return `tid:${node.testID}`;
-  const path = buildPathFromRoot(node);
-  return 'h:' + fnv1aHash(path);
-}
-
-function findFidInRawTree(node, fid) {
-  if (!node) return null;
-  if (node.fid === fid) return node;
-  for (const child of (node.children || [])) {
-    const found = findFidInRawTree(child, fid);
-    if (found) return found;
-  }
-  return null;
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ─── Reset session state ──────────────────────────────────────────────
-
 function resetSession() {
-  resetRefs();
-  fidToStableId.clear();
-  lastRawTree = null;
-  lastTreeFetchAt = 0;
+  resetCache();
 }
 
 module.exports = {

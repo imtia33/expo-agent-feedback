@@ -33,7 +33,6 @@ const VALID_TOOLS = new Set([
   'type',
   'scrollTo',
   'expandList',
-  'debugFibers',
 ]);
 
 const TOOL_SCHEMAS = {
@@ -184,7 +183,6 @@ function startHttpServer() {
         case 'type':        result = await require('./tool-router').type(phoneCall, args); break;
         case 'scrollTo':    result = await require('./tool-router').scrollTo(phoneCall, args); break;
         case 'expandList':  result = await require('./tool-router').expandList(phoneCall, args); break;
-        case 'debugFibers': result = await phoneCall('debugFibers', {}); break;
         default:
           return res.status(404).json({ error: 'unknown_tool', message: `Tool ${tool} not in router` });
       }

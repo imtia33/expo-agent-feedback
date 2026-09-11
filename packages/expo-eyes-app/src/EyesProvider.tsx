@@ -28,7 +28,13 @@ import { View, Text, StyleSheet, Platform } from 'react-native';
 import { WSClient } from './ws-client';
 import { attachDevToolsHook } from './devtools-hook';
 import { ToolCall, ToolResult } from './protocol';
-import { getTree, dispatchEvent, readLayout, scroll, scrollToIndex, debugFibers } from './primitives';
+import {
+  inspectAtPoint,
+  listVisibleElements,
+  dispatchEvent,
+  scroll,
+  scrollToIndex,
+} from './primitives';
 
 export interface EyesProviderProps {
   /** WebSocket URL of the relay, e.g. ws://192.168.1.5:8766 */
@@ -41,15 +47,22 @@ export interface EyesProviderProps {
 }
 
 // Only these primitives are exposed. The relay implements inspect/snapshot/tap/etc.
-const PRIMITIVES = new Set(['getTree', 'dispatchEvent', 'readLayout', 'scroll', 'scrollToIndex', 'debugFibers']);
+// Using RN's own inspector API (renderer.rendererConfig.getInspectorDataForViewAtPoint)
+// — flat hierarchy, no Hermes depth issues.
+const PRIMITIVES = new Set([
+  'inspectAtPoint',
+  'listVisibleElements',
+  'dispatchEvent',
+  'scroll',
+  'scrollToIndex',
+]);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
-  getTree,
+  inspectAtPoint,
+  listVisibleElements,
   dispatchEvent,
-  readLayout,
   scroll,
   scrollToIndex,
-  debugFibers,
 };
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {
