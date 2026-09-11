@@ -276,8 +276,18 @@ function findInRawTree(root, agentNode) {
 
 function deepPrune(node, depth, stats) {
   if (!node) return null;
-  if (depth > 20) { stats.pruned++; return null; }
-  if (stats.emitted >= 100) { stats.pruned++; return null; }
+  if (depth > 50) { stats.pruned++; return null; }
+  if (stats.emitted >= 500) { stats.pruned++; return null; }
+
+  // Transparent wrappers: same logic as pruneTree — pass through single-child
+  // wrappers without bumping depth.
+  if (TRANSPARENT_WRAPPER_TYPES.has(node.type)) {
+    const children = node.children || [];
+    if (children.length === 1) {
+      return deepPrune(children[0], depth, stats);
+    }
+  }
+
   stats.emitted++;
 
   const ref = refForFid(node.fid);
