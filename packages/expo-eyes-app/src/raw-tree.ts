@@ -20,9 +20,18 @@
  *   - Diff against previous calls
  *
  * The relay gets the full raw tree and decides how to present it to the agent.
+ *
+ * Portal handling (the LinkPreviewContextProvider bug):
+ *   Expo Router / React Navigation mounts screen content via React portals.
+ *   A portal creates a new FiberRoot that appears as a SEPARATE entry in
+ *   hook.getFiberRoots(rendererID). The walker now:
+ *     1. Collects ALL fiber roots from all renderers.
+ *     2. Follows HostPortal fibers (tag=4) into their stateNode.containerInfo
+ *        to find additional roots not tracked by getFiberRoots.
+ *     3. Returns all roots as children of a single synthetic "Root" node.
  */
 
-import { walkFibers, findHostInstancesForFiber } from './devtools-hook';
+import { walkFibers, findHostInstancesForFiber, getAllFiberRoots } from './devtools-hook';
 
 export interface RawNode {
   /** Internal fiber ID — opaque to the agent, used by dispatchEvent/readLayout. */
@@ -54,12 +63,16 @@ const HOST_TYPES = new Set([
 ]);
 
 // Fiber tag values (verified in React source)
-// 5 = HostComponent (has a native stateNode)
-// 0 = FunctionComponent
-// 1 = ClassComponent
+// 3  = HostRoot    (FiberRoot.current — the tree root)
+// 4  = HostPortal  (fiber created by ReactDOM.createPortal / RN equivalent)
+// 5  = HostComponent (has a native stateNode)
+// 0  = FunctionComponent
+// 1  = ClassComponent
 // 11 = ForwardRef
 // 15 = SimpleMemoComponent
 const HOST_TAG = 5;
+const HOST_ROOT_TAG = 3;
+const HOST_PORTAL_TAG = 4;
 
 // Whitelisted props we surface to the relay (children is excluded as tree hierarchy is in RawNode.children and text in extractText)
 const PROPS_WHITELIST = new Set([
@@ -223,40 +236,86 @@ async function readLayoutAsync(hostInstance: any): Promise<RawNode['layout'] | u
  * Walk the entire fiber tree and return it as a raw nested structure.
  * Layouts are read in parallel for performance.
  *
- * @param maxDepth safety cap (default 30)
+ * Multi-root support: Expo Router / React Navigation mount screen content
+ * into React portals, which create separate FiberRoots. We collect ALL
+ * roots from all registered renderers and walk each one. If there are
+ * multiple roots, we return them all under a synthetic "RootForest" wrapper
+ * node so the relay always gets a single tree.
+ *
+ * Depth note: Expo Router apps have ~150 levels of React Navigation context
+ * providers before reaching actual screen content. maxDepth=300 ensures
+ * we always reach the actual components. The relay's TRANSPARENT_WRAPPER_TYPES
+ * pruning collapses this for the agent-facing output.
+ *
+ * @param maxDepth safety cap (default 300 — must be > 150 for Expo Router)
  * @param maxNodes safety cap (default 5000)
  */
-export async function getRawTree(maxDepth = 30, maxNodes = 5000): Promise<RawNode | null> {
+export async function getRawTree(maxDepth = 300, maxNodes = 5000): Promise<RawNode | null> {
   fidCounter = 0; // reset for this walk
   const pendingLayouts: Array<{ node: RawNode; hostInstance: any }> = [];
 
-  // Find root fiber
-  let rootFiber: any = null;
-  walkFibers((fiber) => {
-    if (!rootFiber) {
-      rootFiber = fiber;
-      return false;
-    }
-    return true;
-  });
-  if (!rootFiber) return null;
+  // Collect ALL fiber roots from all renderers.
+  // getAllFiberRoots() also discovers portal roots by walking
+  // HostPortal fibers (tag=4) and following stateNode.containerInfo.
+  const allRoots = getAllFiberRoots();
+
+  if (allRoots.length === 0) return null;
 
   const nodeCount = { value: 0 };
-  const tree = serializeFiber(rootFiber, 0, maxDepth, maxNodes, nodeCount, pendingLayouts);
 
-  // Flush all pending layout reads in parallel
-  if (pendingLayouts.length > 0) {
-    const layouts = await Promise.all(
-      pendingLayouts.map(async (r) => ({
-        fid: r.node.fid,
-        layout: await readLayoutAsync(r.hostInstance),
-      })),
-    );
-    const layoutMap = new Map(layouts.map((l) => [l.fid, l.layout]));
-    applyLayouts(tree, layoutMap);
+  // If there's only one root, serialize it directly (no synthetic wrapper).
+  if (allRoots.length === 1) {
+    const tree = serializeFiber(allRoots[0], 0, maxDepth, maxNodes, nodeCount, pendingLayouts);
+    if (pendingLayouts.length > 0) {
+      await flushLayouts(tree, pendingLayouts);
+    }
+    return tree;
   }
 
-  return tree;
+  // Multiple roots — create a synthetic wrapper node.
+  // Use fid=0 (sentinel) so the relay can identify this as the virtual root.
+  const syntheticRoot: RawNode = {
+    fid: 0,
+    type: 'Root',
+    children: [],
+  };
+
+  for (const rootFiber of allRoots) {
+    if (nodeCount.value >= maxNodes) break;
+    const subtree = serializeFiber(rootFiber, 0, maxDepth, maxNodes, nodeCount, pendingLayouts);
+    if (subtree) {
+      syntheticRoot.children.push(subtree);
+    }
+  }
+
+  if (pendingLayouts.length > 0) {
+    await flushLayouts(syntheticRoot, pendingLayouts);
+  }
+
+  // If all roots collapsed into nothing, return null.
+  if (syntheticRoot.children.length === 0) return null;
+
+  // If only one child survived (e.g., other roots were debug overlays that
+  // got pruned by maxNodes), unwrap the synthetic root.
+  if (syntheticRoot.children.length === 1) {
+    return syntheticRoot.children[0];
+  }
+
+  return syntheticRoot;
+}
+
+async function flushLayouts(
+  tree: RawNode | null,
+  pendingLayouts: Array<{ node: RawNode; hostInstance: any }>,
+): Promise<void> {
+  const layouts = await Promise.all(
+    pendingLayouts.map(async (r) => ({
+      fid: r.node.fid,
+      layout: await readLayoutAsync(r.hostInstance),
+    })),
+  );
+  const layoutMap = new Map(layouts.map((l) => [l.fid, l.layout]));
+  if (tree) applyLayouts(tree, layoutMap);
 }
 
 function serializeFiber(
@@ -303,7 +362,12 @@ function serializeFiber(
     }
   }
 
-  // Walk children
+  // Walk children via fiber.child / fiber.sibling as usual.
+  // HostPortal fibers (tag=4) are handled by getAllFiberRoots() which
+  // pre-discovers all portal roots so they appear as top-level roots.
+  // We still descend into the portal fiber's children here because
+  // portal fibers in the fiber tree act as a pass-through — their
+  // fiber.child IS the content rendered into the portal container.
   let child = fiber.child;
   while (child) {
     const childNode = serializeFiber(child, depth + 1, maxDepth, maxNodes, nodeCount, pendingLayouts);

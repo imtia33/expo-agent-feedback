@@ -10,6 +10,7 @@
  */
 
 import { getRawTree, findFiberByFid, getHostInstanceForFiber } from './raw-tree';
+import { getAllFiberRoots } from './devtools-hook';
 
 // ─── getTree ──────────────────────────────────────────────────────────
 
@@ -349,3 +350,79 @@ export async function scrollToIndex(args: {
 
   throw Object.assign(new Error(`List doesn't expose scrollToIndex/scrollToOffset/scrollTo`), { code: 'SCROLL_FAILED' });
 }
+
+// ─── debugFibers (diagnostic only — remove after fix) ─────────────────
+
+/**
+ * Raw diagnostic: dumps fiber root count and a shallow walk of every
+ * fiber (tag, type name, hasChild, hasSibling, hasAlternate).
+ * Used to diagnose the LinkPreviewContextProvider missing-children bug.
+ */
+export async function debugFibers(): Promise<any> {
+  const hook = (globalThis as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!hook) return { error: 'no hook' };
+
+  const renderers = hook.renderers instanceof Map ? hook.renderers.size : 'n/a';
+  const rendererInterfaces = hook.rendererInterfaces instanceof Map ? hook.rendererInterfaces.size : 'n/a';
+
+  // Count roots per renderer
+  const rootsPerRenderer: Record<string, number> = {};
+  if (hook.renderers instanceof Map) {
+    for (const [id] of hook.renderers.entries()) {
+      try {
+        const roots = hook.getFiberRoots(id);
+        rootsPerRenderer[`renderer_${id}`] = roots ? roots.size : 0;
+      } catch (e: any) {
+        rootsPerRenderer[`renderer_${id}`] = -1;
+      }
+    }
+  }
+
+  // Walk all roots via our getAllFiberRoots helper
+  const allRoots = getAllFiberRoots();
+  const fiberDump: any[] = [];
+  let count = 0;
+  const MAX = 200;
+
+  function getTypeName(fiber: any): string {
+    const t = fiber?.elementType;
+    return (
+      (typeof t === 'string' && t) ||
+      t?.displayName || t?.name ||
+      (typeof fiber?.type === 'string' && fiber?.type) ||
+      fiber?.type?.displayName || fiber?.type?.name ||
+      `tag:${fiber?.tag}`
+    );
+  }
+
+  function walk(fiber: any, depth: number) {
+    if (!fiber || count >= MAX) return;
+    count++;
+    fiberDump.push({
+      depth,
+      tag: fiber.tag,
+      type: getTypeName(fiber),
+      hasChild: !!fiber.child,
+      hasSibling: !!fiber.sibling,
+      hasAlternate: !!fiber.alternate,
+      stateNodeType: fiber.stateNode ? (typeof fiber.stateNode === 'object' ? Object.keys(fiber.stateNode).slice(0, 5).join(',') : typeof fiber.stateNode) : null,
+    });
+    if (fiber.child) walk(fiber.child, depth + 1);
+    if (fiber.sibling) walk(fiber.sibling, depth);
+  }
+
+  for (const root of allRoots) {
+    walk(root, 0);
+    if (count >= MAX) break;
+  }
+
+  return {
+    renderers,
+    rendererInterfaces,
+    rootsPerRenderer,
+    allRootsCount: allRoots.length,
+    fiberCount: count,
+    fibers: fiberDump,
+  };
+}
+

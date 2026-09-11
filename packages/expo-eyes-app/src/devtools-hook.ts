@@ -105,6 +105,99 @@ export function getHookRef(): DevToolsHook | null {
   return getHook();
 }
 
+// Fiber tag for portal fibers (React source: ReactWorkTags.js)
+const HOST_PORTAL_TAG = 4;
+
+/**
+ * Collect ALL fiber root fibers from all registered renderers.
+ *
+ * This is the core fix for the Expo Router / React Navigation portal bug:
+ * Expo Router's <Stack> mounts screen content via React portals, which
+ * create SEPARATE FiberRoots. These portal roots ARE tracked by
+ * hook.getFiberRoots() — they appear alongside the main app root — so
+ * simply calling getFiberRoots() on all renderers is sufficient.
+ *
+ * As a belt-and-suspenders measure we also scan for HostPortal fibers
+ * (tag=4) inside the discovered roots and resolve their
+ * stateNode.containerInfo to find any roots that somehow escaped
+ * getFiberRoots() (e.g., custom native portal implementations).
+ *
+ * Returns an array of HostRoot fibers (fiber.tag === 3), one per root.
+ */
+export function getAllFiberRoots(): any[] {
+  const hook = getHook();
+  if (!hook) return [];
+
+  const seen = new Set<any>(); // track FiberRoot objects to avoid duplicates
+  const rootFibers: any[] = [];
+
+  function addRoot(fiberRoot: any) {
+    if (!fiberRoot || seen.has(fiberRoot)) return;
+    seen.add(fiberRoot);
+    const hostRoot = fiberRoot.current;
+    if (hostRoot) rootFibers.push(hostRoot);
+  }
+
+  // Primary: walk all roots from all renderers.
+  for (const rendererID of rendererIds) {
+    let roots: Set<any> | undefined;
+    try {
+      roots = hook.getFiberRoots(rendererID);
+    } catch {
+      continue;
+    }
+    if (!roots || typeof roots.forEach !== 'function') continue;
+    for (const root of roots) {
+      addRoot(root);
+    }
+  }
+
+  // Secondary: scan each discovered root for HostPortal fibers (tag=4).
+  // A HostPortal's stateNode.containerInfo holds the native container that
+  // React rendered into — if that container has a ._reactRootContainer or
+  // ._internalRoot, it's another FiberRoot we should walk.
+  // This catches custom portal implementations that may not register with
+  // the global hook's fiberRoots set.
+  const knownRootCount = rootFibers.length;
+  for (let i = 0; i < knownRootCount; i++) {
+    scanForPortals(rootFibers[i], addRoot);
+  }
+
+  return rootFibers;
+}
+
+/**
+ * Recursively scan a fiber subtree for HostPortal fibers (tag=4) and
+ * resolve their stateNode.containerInfo to additional FiberRoots.
+ */
+function scanForPortals(fiber: any, addRoot: (root: any) => void): void {
+  let node = fiber;
+  while (node) {
+    try {
+      if (node.tag === HOST_PORTAL_TAG) {
+        const containerInfo = node.stateNode?.containerInfo;
+        if (containerInfo) {
+          // React DOM puts the root at containerInfo._reactRootContainer._internalRoot
+          // React Native Fabric puts it at containerInfo._internalRoot or _reactRootContainer
+          const internalRoot =
+            containerInfo._internalRoot ||
+            containerInfo._reactRootContainer?._internalRoot ||
+            containerInfo.__reactFiber?._internalRoot;
+          if (internalRoot) {
+            addRoot(internalRoot);
+          }
+        }
+      }
+    } catch {
+      // Ignore errors traversing portal stateNodes.
+    }
+    if (node.child) {
+      scanForPortals(node.child, addRoot);
+    }
+    node = node.sibling;
+  }
+}
+
 /**
  * Walk every fiber in every renderer by traversing `hook.getFiberRoots()`
  * and following `.child` / `.sibling` pointers.
@@ -118,24 +211,9 @@ export function getHookRef(): DevToolsHook | null {
 export function walkFibers(
   visit: (fiber: any) => void | boolean,
 ): void {
-  const hook = getHook();
-  if (!hook) return;
-
-  for (const rendererID of rendererIds) {
-    let roots: Set<any> | undefined;
-    try {
-      roots = hook.getFiberRoots(rendererID);
-    } catch {
-      continue;
-    }
-    if (!roots || typeof roots.forEach !== 'function') continue;
-
-    for (const root of roots) {
-      // root is a FiberRoot; root.current is the HostRoot fiber
-      const hostRoot = root?.current;
-      if (!hostRoot) continue;
-      walkFiberSiblings(hostRoot, visit);
-    }
+  const rootFibers = getAllFiberRoots();
+  for (const hostRoot of rootFibers) {
+    walkFiberSiblings(hostRoot, visit);
   }
 }
 

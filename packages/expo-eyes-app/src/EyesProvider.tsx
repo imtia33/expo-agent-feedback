@@ -28,7 +28,7 @@ import { View, Text, StyleSheet, Platform } from 'react-native';
 import { WSClient } from './ws-client';
 import { attachDevToolsHook } from './devtools-hook';
 import { ToolCall, ToolResult } from './protocol';
-import { getTree, dispatchEvent, readLayout, scroll, scrollToIndex } from './primitives';
+import { getTree, dispatchEvent, readLayout, scroll, scrollToIndex, debugFibers } from './primitives';
 
 export interface EyesProviderProps {
   /** WebSocket URL of the relay, e.g. ws://192.168.1.5:8766 */
@@ -41,7 +41,7 @@ export interface EyesProviderProps {
 }
 
 // Only these primitives are exposed. The relay implements inspect/snapshot/tap/etc.
-const PRIMITIVES = new Set(['getTree', 'dispatchEvent', 'readLayout', 'scroll', 'scrollToIndex']);
+const PRIMITIVES = new Set(['getTree', 'dispatchEvent', 'readLayout', 'scroll', 'scrollToIndex', 'debugFibers']);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   getTree,
@@ -49,6 +49,7 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   readLayout,
   scroll,
   scrollToIndex,
+  debugFibers,
 };
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {
