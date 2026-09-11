@@ -1,15 +1,21 @@
 import { View, Text, Pressable, StyleSheet, Linking } from 'react-native';
-import { Link } from 'expo-router';
+import { useRouter } from 'expo-router';
 
 export default function AboutScreen() {
+  const router = useRouter();
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Link href="/" asChild>
-          <Pressable testID="back-button" accessibilityRole="button" accessibilityLabel="Back to home" style={styles.backButton}>
-            <Text style={styles.backText}>← Back</Text>
-          </Pressable>
-        </Link>
+        <Pressable
+          testID="back-button"
+          accessibilityRole="button"
+          accessibilityLabel="Back to home"
+          style={styles.backButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.backText}>← Back</Text>
+        </Pressable>
         <Text style={styles.title} accessibilityRole="header">About</Text>
       </View>
 

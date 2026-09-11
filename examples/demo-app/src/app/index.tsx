@@ -1,8 +1,9 @@
 import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
-import { Link } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 
 export default function HomeScreen() {
+  const router = useRouter();
   const [count, setCount] = useState(0);
   const [inputText, setInputText] = useState('');
 
@@ -33,7 +34,7 @@ export default function HomeScreen() {
           testID="reset-button"
           accessibilityRole="button"
           accessibilityLabel="Reset counter"
-          style={[styles.button, styles.secondaryButton]}
+          style={styles.secondaryButton}
           onPress={() => setCount(0)}
         >
           <Text style={styles.buttonText}>Reset</Text>
@@ -57,26 +58,24 @@ export default function HomeScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Navigation</Text>
-        <Link href="/list" asChild>
-          <Pressable
-            testID="go-to-list"
-            accessibilityRole="button"
-            accessibilityLabel="Go to list screen"
-            style={[styles.button, styles.secondaryButton]}
-          >
-            <Text style={styles.buttonText}>Open List →</Text>
-          </Pressable>
-        </Link>
-        <Link href="/about" asChild>
-          <Pressable
-            testID="go-to-about"
-            accessibilityRole="button"
-            accessibilityLabel="Go to about screen"
-            style={[styles.button, styles.secondaryButton]}
-          >
-            <Text style={styles.buttonText}>About →</Text>
-          </Pressable>
-        </Link>
+        <Pressable
+          testID="go-to-list"
+          accessibilityRole="button"
+          accessibilityLabel="Go to list screen"
+          style={styles.secondaryButton}
+          onPress={() => router.push('/list')}
+        >
+          <Text style={styles.buttonText}>Open List →</Text>
+        </Pressable>
+        <Pressable
+          testID="go-to-about"
+          accessibilityRole="button"
+          accessibilityLabel="Go to about screen"
+          style={styles.secondaryButton}
+          onPress={() => router.push('/about')}
+        >
+          <Text style={styles.buttonText}>About →</Text>
+        </Pressable>
       </View>
 
       <View style={styles.section}>
@@ -85,7 +84,7 @@ export default function HomeScreen() {
           testID="long-press-target"
           accessibilityRole="button"
           accessibilityLabel="Long press me"
-          style={[styles.button, styles.longPressButton]}
+          style={styles.longPressButton}
           onLongPress={() => Alert.alert('Long pressed!', 'You held it long enough.')}
           delayLongPress={400}
         >
@@ -121,8 +120,20 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
-  secondaryButton: { backgroundColor: '#666' },
-  longPressButton: { backgroundColor: '#a83232' },
+  secondaryButton: {
+    backgroundColor: '#666',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  longPressButton: {
+    backgroundColor: '#a83232',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
   buttonText: { color: 'white', fontSize: 16, fontWeight: '600' },
   input: {
     borderWidth: 1,

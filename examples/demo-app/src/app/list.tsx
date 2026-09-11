@@ -1,5 +1,5 @@
 import { View, Text, FlatList, Pressable, StyleSheet, Alert } from 'react-native';
-import { Link } from 'expo-router';
+import { useRouter } from 'expo-router';
 
 const DATA = Array.from({ length: 2347 }, (_, i) => ({
   id: `${i}`,
@@ -8,14 +8,20 @@ const DATA = Array.from({ length: 2347 }, (_, i) => ({
 }));
 
 export default function ListScreen() {
+  const router = useRouter();
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Link href="/" asChild>
-          <Pressable testID="back-button" accessibilityRole="button" accessibilityLabel="Back to home" style={styles.backButton}>
-            <Text style={styles.backText}>← Back</Text>
-          </Pressable>
-        </Link>
+        <Pressable
+          testID="back-button"
+          accessibilityRole="button"
+          accessibilityLabel="Back to home"
+          style={styles.backButton}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.backText}>← Back</Text>
+        </Pressable>
         <Text style={styles.title} accessibilityRole="header">Big List (2347 items)</Text>
       </View>
 
@@ -28,7 +34,7 @@ export default function ListScreen() {
             testID={`list-item-${item.id}`}
             accessibilityRole="button"
             accessibilityLabel={`Item ${index + 1}`}
-            style={({ pressed }) => [styles.item, pressed && styles.itemPressed]}
+            style={({ pressed }) => pressed ? styles.itemPressed : styles.item}
             onPress={() => Alert.alert('Tapped', item.title)}
           >
             <Text style={styles.itemTitle}>{item.title}</Text>
@@ -57,7 +63,7 @@ const styles = StyleSheet.create({
   backText: { color: '#0a7ea4', fontSize: 16, fontWeight: '600' },
   title: { fontSize: 17, fontWeight: 'bold' },
   item: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  itemPressed: { backgroundColor: '#f5f5f5' },
+  itemPressed: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: '#f5f5f5' },
   itemTitle: { fontSize: 16, fontWeight: '600' },
   itemSubtitle: { fontSize: 13, color: '#666', marginTop: 2 },
 });
