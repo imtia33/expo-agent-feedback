@@ -108,7 +108,26 @@ export class WSClient {
 
   /** Send a message to the relay. Queues if not yet connected. */
   send(message: any) {
-    const data = JSON.stringify(message);
+    let data: string;
+    try {
+      data = JSON.stringify(message);
+    } catch (err: any) {
+      if (message && message.callId) {
+        data = JSON.stringify({
+          type: 'tool-result',
+          callId: message.callId,
+          ok: false,
+          error: {
+            code: 'SERIALIZE_ERROR',
+            message: `Failed to serialize tool result: ${err?.message || err}`,
+          },
+          durationMs: 0,
+        });
+      } else {
+        console.warn('[expo-eyes] Failed to stringify message:', err);
+        return;
+      }
+    }
     if (this.ready && this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(data);

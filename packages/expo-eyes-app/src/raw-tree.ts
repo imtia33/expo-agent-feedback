@@ -61,14 +61,14 @@ const HOST_TYPES = new Set([
 // 15 = SimpleMemoComponent
 const HOST_TAG = 5;
 
-// Whitelisted props we surface to the relay
+// Whitelisted props we surface to the relay (children is excluded as tree hierarchy is in RawNode.children and text in extractText)
 const PROPS_WHITELIST = new Set([
   'placeholder', 'keyboardType', 'secureTextEntry', 'editable',
   'maxLength', 'multiline', 'numberOfLines', 'horizontal', 'numColumns',
   'keyExtractor', 'renderItem', 'data', 'source', 'resizeMode',
   'accessibilityRole', 'accessibilityLabel', 'accessibilityHint',
   'accessibilityState', 'testID', 'accessible', 'disabled', 'checked',
-  'selected', 'value', 'title', 'children',
+  'selected', 'value', 'title',
 ]);
 
 let fidCounter = 0;
@@ -131,6 +131,35 @@ function readState(fiber: any): RawNode['state'] {
   return state;
 }
 
+function safeSerializeValue(val: any, seen = new WeakSet()): any {
+  if (val === null || val === undefined) return val;
+  const t = typeof val;
+  if (t === 'string' || t === 'number' || t === 'boolean') return val;
+  if (t === 'function') return '[function]';
+  if (t === 'symbol' || t === 'bigint') return val.toString();
+  if (t === 'object') {
+    if (val.$$typeof || val._owner) return '[ReactElement]';
+    if (seen.has(val)) return '[Circular]';
+    seen.add(val);
+
+    if (Array.isArray(val)) {
+      if (val.length > 50) return `[Array length=${val.length}]`;
+      return val.map((item) => safeSerializeValue(item, seen));
+    }
+
+    const res: Record<string, any> = {};
+    for (const k of Object.keys(val)) {
+      try {
+        res[k] = safeSerializeValue(val[k], seen);
+      } catch {
+        res[k] = '[unserializable]';
+      }
+    }
+    return res;
+  }
+  return '[unknown]';
+}
+
 function extractWhitelistedProps(fiber: any): Record<string, any> | undefined {
   const props = fiber?.memoizedProps;
   if (!props || typeof props !== 'object') return undefined;
@@ -139,21 +168,14 @@ function extractWhitelistedProps(fiber: any): Record<string, any> | undefined {
   for (const key of Object.keys(props)) {
     if (PROPS_WHITELIST.has(key)) {
       const value = props[key];
-      if (typeof value === 'function') {
-        out[key] = '[function]';
-        hasAny = true;
-      } else if (Array.isArray(value) && value.length > 50) {
-        out[key] = `[Array length=${value.length}]`;
-        hasAny = true;
-      } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        try {
-          out[key] = JSON.parse(JSON.stringify(value));
+      try {
+        const serialized = safeSerializeValue(value);
+        if (serialized !== undefined) {
+          out[key] = serialized;
           hasAny = true;
-        } catch {
-          out[key] = '[object]';
         }
-      } else {
-        out[key] = value;
+      } catch {
+        out[key] = '[unserializable]';
         hasAny = true;
       }
     }
