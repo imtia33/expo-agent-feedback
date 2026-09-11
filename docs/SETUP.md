@@ -2,39 +2,60 @@
 
 How to add `expo-eyes-app` to **your own** Expo project, so an agent can drive it.
 
-## Prerequisites
+## Three modes
 
-| Requirement | Check |
-|---|---|
-| Node.js 18+ | `node -v` |
-| Expo SDK 57+ | `npx expo --version` |
-| React 19+ | see `package.json` |
-| React Native 0.86+ | see `package.json` |
-| Phone and laptop on same Wi-Fi | (or use simulators) |
+| Mode | Use case | Auth | Tunnel |
+|---|---|---|---|
+| **LAN-only** (default) | You + agent both on same Wi-Fi | None | None |
+| **LAN with token** | Same Wi-Fi, but want auth | Required | None |
+| **Tunnel** | Agent is remote (different country, cloud) | Required | cloudflared |
 
-If you're on an older Expo SDK, upgrade first:
+Most users start with **LAN-only**. Switch to **Tunnel** when you want a remote agent (e.g. Claude in another country) to drive your app.
+
+---
+
+## Step 1 — Install the relay on your laptop
+
+### Option A — Tarball (recommended, works today)
+
 ```bash
-npx expo install expo@latest
+mkdir expo-eyes-relay && cd expo-eyes-relay
+npm init -y
+npm install https://github.com/imtia33/expo-feedback-Agent/raw/main/releases/expo-eyes-relay-0.1.0.tgz
 ```
 
-## Step 1 — Start the relay on your laptop
+### Option B — Clone the repo
 
 ```bash
 git clone https://github.com/imtia33/expo-feedback-Agent.git
 cd expo-feedback-Agent/packages/expo-eyes-relay
 npm install
+```
+
+## Step 2 — Start the relay (LAN-only mode)
+
+```bash
+# If you used Option A:
+npx expo-eyes-relay
+
+# If you used Option B:
 npm start
 ```
 
-The banner shows the **token** and the relay's URL. Save both.
+You'll see:
 
-```bash
-# Verify the relay is up
-curl http://localhost:8765/health
-# → {"ok":true, "phone":{"phoneConnected":false, ...}}
+```
+╔══════════════════════════════════════════════════════════════════╗
+║                        expo-eyes-relay                           ║
+╠══════════════════════════════════════════════════════════════════╣
+║  HTTP (local):  http://0.0.0.0:8765                              ║
+║  WS   (phone):  ws://0.0.0.0:8766                                ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Auth: DISABLED (open relay, LAN-only)                           ║
+╚══════════════════════════════════════════════════════════════════╝
 ```
 
-Find your laptop's LAN IP (the phone needs this):
+**Find your laptop's LAN IP:**
 
 ```bash
 # macOS
@@ -47,64 +68,24 @@ ip addr show | grep 'inet ' | grep -v 127.0.0.1
 Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress -notlike '127.*'} | Select IPAddress
 ```
 
-## Step 2 — Install expo-eyes-app in your project
+Write this down — call it `YOUR_LAN_IP`.
 
-You have two options:
-
-### Option A — Local file dependency (works today, no publish needed)
+## Step 3 — Install expo-eyes-app in your Expo project
 
 From inside your Expo project:
 
 ```bash
-# If you cloned expo-feedback-Agent to ~/code/expo-feedback-Agent:
-npm install ~/code/expo-feedback-Agent/packages/expo-eyes-app
+npm install https://github.com/imtia33/expo-feedback-Agent/raw/main/releases/expo-eyes-app-0.1.0.tgz
 ```
 
-Or use a relative path:
+## Step 4 — Wrap your app root in `<EyesProvider>`
 
-```bash
-npm install ../expo-feedback-Agent/packages/expo-eyes-app
-```
+One file. One wrapper. That's it.
 
-This adds an entry to your `package.json` like:
-```json
-"expo-eyes-app": "file:../expo-feedback-Agent/packages/expo-eyes-app"
-```
-
-### Option B — Pack and install (shareable across machines, no publish)
-
-```bash
-# In the expo-eyes-app package
-cd expo-feedback-Agent/packages/expo-eyes-app
-npm pack
-# → creates expo-eyes-app-0.1.0.tgz
-
-# In your project
-npm install /path/to/expo-eyes-app-0.1.0.tgz
-```
-
-### Option C — Once we publish to npm (later)
-
-```bash
-npm install expo-eyes-app
-```
-
-(Not yet — package isn't published.)
-
-## Step 3 — Wrap your app root in `<EyesProvider>`
-
-This is the only code change you need. **One file.**
-
-### If you use Expo Router (default for `create-expo-app`)
-
-Find your root layout. It's usually at:
-- `app/_layout.tsx` (top-level layout in app router)
-- `src/app/_layout.tsx` (newer template)
-
-Wrap it:
+### Expo Router (default `create-expo-app` template)
 
 ```tsx
-// app/_layout.tsx (or src/app/_layout.tsx)
+// src/app/_layout.tsx  (or app/_layout.tsx on older templates)
 import { Stack } from 'expo-router';
 import { EyesProvider } from 'expo-eyes-app';
 
@@ -112,7 +93,7 @@ export default function RootLayout() {
   return (
     <EyesProvider
       relayUrl="ws://YOUR_LAN_IP:8766"
-      token="YOUR_TOKEN"
+      token=""   // empty string for LAN-only mode
     >
       <Stack />
     </EyesProvider>
@@ -120,38 +101,21 @@ export default function RootLayout() {
 }
 ```
 
-### If you don't use Expo Router (blank template, App.js entry)
-
-Find your `App.js` (or `App.tsx`):
+### Plain App.tsx (blank template)
 
 ```tsx
-// App.tsx
 import { EyesProvider } from 'expo-eyes-app';
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
 
 export default function App() {
   return (
-    <EyesProvider
-      relayUrl="ws://YOUR_LAN_IP:8766"
-      token="YOUR_TOKEN"
-    >
-      <View style={styles.container}>
-        <Text>Your app here</Text>
-        <StatusBar style="auto" />
-      </View>
+    <EyesProvider relayUrl="ws://YOUR_LAN_IP:8766" token="">
+      {/* your app */}
     </EyesProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-});
 ```
 
-### If you use React Navigation directly (no Expo Router)
-
-Same pattern — wrap your root navigator:
+### React Navigation (no Expo Router)
 
 ```tsx
 import { EyesProvider } from 'expo-eyes-app';
@@ -159,152 +123,184 @@ import { NavigationContainer } from '@react-navigation/native';
 
 export default function App() {
   return (
-    <EyesProvider relayUrl="ws://YOUR_LAN_IP:8766" token="YOUR_TOKEN">
-      <NavigationContainer>
-        {/* your Stack / Tab / Drawer navigator */}
-      </NavigationContainer>
+    <EyesProvider relayUrl="ws://YOUR_LAN_IP:8766" token="">
+      <NavigationContainer>{/* your navigator */}</NavigationContainer>
     </EyesProvider>
   );
 }
 ```
 
-## Step 4 — Don't hardcode the token (optional but recommended)
-
-Use Expo's `EXPO_PUBLIC_*` env vars so you don't commit your token:
-
-```bash
-# .env (gitignored)
-EXPO_PUBLIC_RELAY_URL=ws://192.168.1.5:8766
-EXPO_PUBLIC_EYES_TOKEN=your-token-here
-```
-
-Then in your layout:
-
-```tsx
-const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL!;
-const TOKEN = process.env.EXPO_PUBLIC_EYES_TOKEN!;
-
-<EyesProvider relayUrl={RELAY_URL} token={TOKEN}>
-  {/* ... */}
-</EyesProvider>
-```
-
-`.env` is read automatically by Expo CLI. Add `.env` to `.gitignore`.
-
-## Step 5 — Start your app
+## Step 5 — Run your app
 
 ```bash
 npx expo start
 ```
 
-Press `i` (iOS simulator), `a` (Android emulator), or scan the QR with Expo Go on your phone.
+Press `i` (iOS), `a` (Android), or scan the QR with Expo Go.
 
-You should see a small badge in the top-right corner:
+When the app launches, look for a small badge in the top-right:
+- 🟢 **eyes:connected** — relay reached, all good
+- 🟡 **eyes:connecting** — wrong IP / firewall / different Wi-Fi
+- 🔴 **eyes:disconnected** — auth failed or relay is down
 
-| Badge | Meaning |
-|---|---|
-| 🟢 **eyes:connected** | Phone is talking to the relay ✓ |
-| 🟡 **eyes:connecting** | Still trying (or wrong IP/token) |
-| 🔴 **eyes:disconnected** | Auth failed, or relay is down |
-
-Check the relay console — you should see:
-```
-[ws] phone connecting from 192.168.1.42
-[ws] phone authenticated: app=ios sdk=unknown
-[relay] ✓ phone connected: app=ios
-```
-
-## Step 6 — Test from an agent
-
-From your laptop (or anywhere with the token):
+## Step 6 — Verify from the agent side
 
 ```bash
+# Install the agent (tarball)
+npm install -g https://github.com/imtia33/expo-feedback-Agent/raw/main/releases/expo-eyes-agent-0.1.0.tgz
+
 # Set env vars
 export EXPO_EYES_RELAY_URL=http://YOUR_LAN_IP:8765
-export EXPO_EYES_TOKEN=YOUR_TOKEN
+# No token needed in LAN-only mode
 
-# Inspect your real app's tree!
-npx expo-eyes-agent inspect
+# Inspect your real app's tree
+expo-eyes-agent inspect
 ```
 
-You should see YOUR app's components, YOUR testIDs, YOUR text content. **That's the loop working.**
+You should see YOUR app's components, YOUR testIDs, YOUR text. **That's the loop working.**
 
-## Troubleshooting
+---
 
-### "eyes:connecting" never turns green
+## Remote agent mode (Tunnel)
 
-1. **Same Wi-Fi?** Phone and laptop must be on the same network. Public Wi-Fi often blocks device-to-device traffic — use home Wi-Fi or a hotspot.
-2. **Firewall?** macOS: System Settings → Network → Firewall → allow Node on ports 8765/8766. Windows: same idea.
-3. **Right IP?** Run `curl http://YOUR_LAN_IP:8765/health` from another device — if it fails, the IP is wrong or firewall is blocking.
-4. **Right token?** Compare the token in your `EyesProvider` to what the relay printed. They must match exactly.
+When you want an agent in another country (or a cloud LLM) to drive your app:
 
-### App crashes immediately on launch
-
-Most common cause: `expo-eyes-app` peer deps don't match. Check:
-- `react`: must be 19.x
-- `react-native`: must be 0.86.x
-- `expo`: must be 57.x
-
-If your app is older, upgrade:
-```bash
-npx expo install expo@latest react@latest react-native@latest
-```
-
-### TypeScript errors in your project after install
-
-If you see errors like "Cannot find module 'expo-eyes-app'" in your IDE:
+### Step 1 — Install cloudflared
 
 ```bash
-# Restart the TS server (in VS Code: Cmd+Shift+P → "TypeScript: Restart TS Server")
-# Or just restart your editor
+# macOS
+brew install cloudflared
+
+# Debian/Ubuntu (see https://pkg.cloudflare.com/index.html)
+sudo apt install cloudflared
+
+# Windows
+winget install --id Cloudflare.cloudflared
 ```
 
-### `NO_PHONE` from agent
+Verify: `cloudflared --version`
 
-The agent can't find the phone. Check:
-1. Is the app running? (Green badge visible?)
-2. Is the relay console showing "phone connected"?
-3. Same token on both sides?
+### Step 2 — Start the relay with `--tunnel` and `--token`
 
-### Connection drops when app goes to background
+```bash
+npx expo-eyes-relay --tunnel --token=$(openssl rand -hex 24)
+```
 
-iOS aggressively suspends WebSocket connections when the app is backgrounded. Either:
-- Keep the app in the foreground while testing
-- Or run on a simulator (simulators don't suspend)
+You'll see:
 
-This is iOS behavior, not a bug in expo-eyes. The connection auto-reconnects when the app returns to foreground.
+```
+╔══════════════════════════════════════════════════════════════════╗
+║                        expo-eyes-relay                           ║
+╠══════════════════════════════════════════════════════════════════╣
+║  HTTP (local):  http://0.0.0.0:8765                              ║
+║  WS   (phone):  ws://0.0.0.0:8766                                ║
+║  HTTP (public): https://random-words.trycloudflare.com           ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Auth: Bearer token required                                      ║
+║  a3f8c2e9b1d4f6a7c8e9d0b1a2c3e4f5b6a7c8d9                         ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+**Copy the public URL and the token.** The phone still uses the LAN IP (`ws://YOUR_LAN_IP:8766`) — only the agent uses the public URL.
+
+### Step 3 — Update your app's `EyesProvider`
+
+```tsx
+<EyesProvider
+  relayUrl="ws://YOUR_LAN_IP:8766"   // still LAN — phone is local
+  token="a3f8c2e9b1d4f6a7c8e9d0b1a2c3e4f5b6a7c8d9"  // now required
+>
+```
+
+### Step 4 — Give the remote agent the public URL + token
+
+```bash
+# From anywhere in the world
+export EXPO_EYES_RELAY_URL=https://random-words.trycloudflare.com
+export EXPO_EYES_TOKEN=a3f8c2e9b1d4f6a7c8e9d0b1a2c3e4f5b6a7c8d9
+
+expo-eyes-agent inspect
+```
+
+**Note:** The tunnel URL changes every time you restart the relay. Re-run with `--tunnel --token=...` to get a new one.
+
+---
+
+## Optional: `--app-url` flag (metadata)
+
+If you want the agent to know which Expo app it's driving (useful when you have multiple projects):
+
+```bash
+npx expo-eyes-relay --app-url exp://192.168.1.5:8081
+```
+
+The relay stores this and exposes it in `/health`:
+
+```bash
+curl http://YOUR_LAN_IP:8765/health
+# → { "appUrl": "exp://192.168.1.5:8081", ... }
+```
+
+Right now this is **metadata only** — the phone still connects OUT to the relay via WS. In the future, when we add relay → phone direct connection (using `react-native-nitro-http-server`), this URL will be how the relay finds the phone.
+
+---
+
+## Common issues
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "eyes:connecting" never turns green | Phone can't reach relay WS | Check LAN IP, same Wi-Fi, firewall on ports 8765/8766 |
+| "eyes:disconnected" red | Wrong token | Compare token in app vs relay banner |
+| `EADDRINUSE` on relay start | Port 8765/8766 in use | `EXPO_EYES_HTTP_PORT=18765 EXPO_EYES_WS_PORT=18766 npm start` |
+| `NO_PHONE` from agent | Phone not connected | Check green badge in app + relay log |
+| App crashes on launch | Wrong React/RN version | `npx expo install expo@latest react@latest react-native@latest` |
+| TS errors in your app | IDE caching old types | Restart TS server (Cmd+Shift+P → "TypeScript: Restart TS Server") |
+| Tunnel URL changes on restart | Quick tunnels are ephemeral | For stable URL: set up a named tunnel via cloudflared account |
+| cloudflared "command not found" | Not installed | `brew install cloudflared` (mac) / `apt install cloudflared` (linux) |
+| Tunnel refused to start | `--tunnel` without `--token` | Always pass `--token=...` when using `--tunnel` |
+
+---
 
 ## Verifying it really works — a 30-second test
 
-Once everything is set up, run this from your laptop:
-
 ```bash
 # 1. Check phone is connected
-npx expo-eyes-agent health
+expo-eyes-agent health
 
 # 2. Inspect the visible tree
-npx expo-eyes-agent inspect > tree.json
+expo-eyes-agent inspect > tree.json
 
-# 3. Look at the top of the tree
+# 3. Look at the top
 head -30 tree.json
 
-# 4. Find any Pressable / Button with a testID
+# 4. Find a Pressable with a testID
 #    (look for "testID" in the output)
 
-# 5. Tap it (replace r5 with the actual ref)
-npx expo-eyes-agent tap --ref r5
+# 5. Tap it (replace r5 with the actual ref, or use tid:your-testID)
+expo-eyes-agent tap --ref r5
+# OR
+expo-eyes-agent tap --ref tid:submit-button
 
 # 6. Inspect again — see if state changed
-npx expo-eyes-agent inspect > tree2.json
+expo-eyes-agent inspect > tree2.json
 diff <(jq '.tree' tree.json) <(jq '.tree' tree2.json) | head -20
 ```
 
-If the diff shows state changes (like `counterValue` going from `0` to `1`), the loop is real. 🎉
+If the diff shows state changes (like a counter going from `0` to `1`), the loop is real. 🎉
 
-## What's next
+---
 
-Once setup is done, tell me what you'd like to add:
-- **Scroll position + visible-nodes tools** (v1.1 — fixes the nested scroll question)
-- **Code editing tools** (readFile/editFile/grep + HMR wait)
-- **VS Code extension** with a live activity panel
-- **Real-device test together** — paste your `inspect` output and I'll show you how I'd reason over it
+## Architecture (one-page summary)
+
+```
+Phone (Expo app + expo-eyes-app)
+  │ WS (LAN, phone → relay, outbound)
+  ▼
+Laptop — expo-eyes-relay  ← THE BRAINS
+  - All ref allocation, stableId hashing, tree pruning, tap resolution
+  - HTTP API for agents (LAN or via --tunnel for remote)
+  ▼ HTTP / HTTPS
+Agent (Claude / Cursor / curl / CLI)
+```
+
+The app SDK is intentionally thin (5 primitives, no computation). All the smart stuff lives in the relay. This is the moat — see [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the full reasoning.
