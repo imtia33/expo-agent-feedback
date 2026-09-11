@@ -1,29 +1,70 @@
 /**
  * tunnel.js — exposes the relay's HTTP port via a public URL.
  *
- * Verified against cloudflared docs (see docs/libraries/cloudflared-API-summary.md).
- *
- * Strategy:
- *   1. If cloudflared is installed → use it (anonymous, no account)
- *   2. Else if NGROK_AUTHTOKEN env var set → use ngrok
- *   3. Else if localtunnel available → npx localtunnel (no install)
- *   4. Else → print install instructions and exit
+ * Strategy (priority order):
+ *   1. ngrok if NGROK_AUTHTOKEN env var is set
+ *      (globally routed — same URL works from anywhere, including China)
+ *   2. cloudflared if installed
+ *      (anonymous, no account, but quick tunnels are edge-locked — requests
+ *       from other Cloudflare edges get 404. Works locally, may fail cross-region.)
+ *   3. localtunnel via npx (no install needed, last resort)
  *
  * The tunnel is ONLY for the HTTP port (agent → relay).
  * The phone → relay WS connection stays on LAN.
  */
 
 const { spawn } = require('child_process');
-const { existsSync } = require('fs');
+const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const TRYCLOUDFLARE_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 
-/**
- * Start a tunnel for the given HTTP port.
- * Returns a Promise that resolves with the public URL.
- */
+function config_provider() {
+  try { return require('./config').tunnelProvider || 'auto'; } catch { return 'auto'; }
+}
+
+function hasNgrokConfig() {
+  if (process.env.NGROK_AUTHTOKEN) return true;
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, 'AppData', 'Local', 'ngrok', 'ngrok.yml'),
+    path.join(home, '.config', 'ngrok', 'ngrok.yml'),
+    path.join(home, '.ngrok2', 'ngrok.yml'),
+  ];
+  return candidates.some((p) => fs.existsSync(p));
+}
+
 function startTunnel(httpPort) {
+  const provider = config_provider();
+
+  if (provider === 'cloudflare') {
+    return tryCloudflared(httpPort);
+  }
+  if (provider === 'ngrok') {
+    return tryNgrok(httpPort);
+  }
+  if (provider === 'localtunnel') {
+    return tryLocaltunnel(httpPort);
+  }
+
+  // 'auto' mode: try ngrok if token or config exists, then cloudflared, then localtunnel
+  if (hasNgrokConfig()) {
+    return tryNgrok(httpPort)
+      .catch((e) => {
+        console.warn(`[tunnel] ngrok failed: ${e.message}`);
+        return tryCloudflared(httpPort);
+      })
+      .catch((e) => {
+        console.warn(`[tunnel] cloudflared failed: ${e.message}`);
+        return tryLocaltunnel(httpPort);
+      })
+      .catch((e) => {
+        console.error(`[tunnel] all providers failed: ${e.message}`);
+        throw new Error('No tunnel provider available');
+      });
+  }
+
   return tryCloudflared(httpPort)
     .catch((e) => {
       console.warn(`[tunnel] cloudflared failed: ${e.message}`);
@@ -35,57 +76,55 @@ function startTunnel(httpPort) {
     })
     .catch((e) => {
       console.error(`[tunnel] all providers failed: ${e.message}`);
-      console.error('');
-      console.error('Install one of:');
-      console.error('  brew install cloudflared       (macOS, recommended)');
-      console.error('  apt install cloudflared         (Debian/Ubuntu)');
-      console.error('  winget install Cloudflare.cloudflared  (Windows)');
-      console.error('  npm install -g ngrok            (requires authtoken)');
-      console.error('');
       throw new Error('No tunnel provider available');
     });
 }
 
+// ─── cloudflared ──────────────────────────────────────────────────────
+
 function tryCloudflared(httpPort) {
   return new Promise((resolve, reject) => {
-    const child = spawn('cloudflared', [
-      'tunnel', '--url', `http://localhost:${httpPort}`, '--no-autoupdate',
-    ], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const args = [
+      'tunnel',
+      '--config', nullDevice,
+      '--url', `http://localhost:${httpPort}`,
+      '--http-host-header', `localhost:${httpPort}`,
+      '--no-autoupdate',
+    ];
+    const child = spawn('cloudflared', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     let resolved = false;
-    let stderrBuffer = '';
-
     const timeout = setTimeout(() => {
       if (!resolved) {
-        try { process.kill(-child.pid, 'SIGTERM'); } catch {}
-        reject(new Error('cloudflared took >15s to provide URL'));
+        killChild(child);
+        reject(new Error('cloudflared took >30s to provide URL'));
       }
-    }, 15000);
+    }, 30000);
 
-    child.stderr.on('data', (chunk) => {
+    const onData = (chunk) => {
       const text = chunk.toString();
-      stderrBuffer += text;
       if (config_verbose()) process.stderr.write(`[cloudflared] ${text}`);
-
       const match = text.match(TRYCLOUDFLARE_REGEX);
       if (match && !resolved) {
         resolved = true;
         clearTimeout(timeout);
         console.log(`[tunnel] cloudflared: ${match[0]}`);
-        // Register cleanup
         registerCleanup(child);
         resolve(match[0]);
       }
-    });
+    };
+
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
 
     child.on('error', (e) => {
       if (!resolved) {
         clearTimeout(timeout);
-        if (e.code === 'ENOENT') {
-          reject(new Error('cloudflared not installed'));
-        } else {
-          reject(e);
-        }
+        if (e.code === 'ENOENT') reject(new Error('cloudflared not installed'));
+        else reject(e);
       }
     });
 
@@ -98,66 +137,89 @@ function tryCloudflared(httpPort) {
   });
 }
 
+// ─── ngrok ────────────────────────────────────────────────────────────
+
 function tryNgrok(httpPort) {
   const authtoken = process.env.NGROK_AUTHTOKEN;
-  if (!authtoken) {
-    return Promise.reject(new Error('NGROK_AUTHTOKEN not set'));
+  const args = ['http', String(httpPort), '--log=stdout'];
+  if (authtoken) {
+    args.push('--authtoken', authtoken);
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn('ngrok', ['http', String(httpPort), '--authtoken', authtoken], {
-      detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+    const child = spawn('ngrok', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
     });
 
     let resolved = false;
     const timeout = setTimeout(() => {
       if (!resolved) {
-        try { process.kill(-child.pid, 'SIGTERM'); } catch {}
-        reject(new Error('ngrok took >15s'));
+        killChild(child);
+        reject(new Error('ngrok took >20s to provide URL'));
       }
-    }, 15000);
+    }, 20000);
 
-    child.stdout.on('data', async (chunk) => {
+    // Poll ngrok's local API at localhost:4040/api/tunnels every 500ms.
+    const pollInterval = setInterval(async () => {
+      if (resolved) return;
+      try {
+        const resp = await fetch('http://localhost:4040/api/tunnels');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data.tunnels && data.tunnels.length > 0 && data.tunnels[0].public_url) {
+          resolved = true;
+          clearTimeout(timeout);
+          clearInterval(pollInterval);
+          console.log(`[tunnel] ngrok: ${data.tunnels[0].public_url}`);
+          registerCleanup(child);
+          resolve(data.tunnels[0].public_url);
+        }
+      } catch {}
+    }, 500);
+
+    child.stdout.on('data', (chunk) => {
       const text = chunk.toString();
       if (config_verbose()) process.stderr.write(`[ngrok] ${text}`);
+    });
 
-      // Try fetching the URL from ngrok's local API
-      if (!resolved) {
-        try {
-          const resp = await fetch('http://localhost:4040/api/tunnels');
-          const data = await resp.json();
-          if (data.tunnels && data.tunnels[0] && data.tunnels[0].public_url) {
-            resolved = true;
-            clearTimeout(timeout);
-            console.log(`[tunnel] ngrok: ${data.tunnels[0].public_url}`);
-            registerCleanup(child);
-            resolve(data.tunnels[0].public_url);
-          }
-        } catch {}
-      }
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      if (config_verbose()) process.stderr.write(`[ngrok:err] ${text}`);
     });
 
     child.on('error', (e) => {
       if (!resolved) {
         clearTimeout(timeout);
-        if (e.code === 'ENOENT') reject(new Error('ngrok not installed'));
+        clearInterval(pollInterval);
+        if (e.code === 'ENOENT') reject(new Error('ngrok not installed (run: npm install -g ngrok)'));
         else reject(e);
+      }
+    });
+
+    child.on('exit', (code) => {
+      if (!resolved) {
+        clearTimeout(timeout);
+        clearInterval(pollInterval);
+        reject(new Error(`ngrok exited with code ${code} before providing URL`));
       }
     });
   });
 }
 
+// ─── localtunnel (last resort) ────────────────────────────────────────
+
 function tryLocaltunnel(httpPort) {
   return new Promise((resolve, reject) => {
-    // localtunnel is a node package — we spawn npx
     const child = spawn('npx', ['--yes', 'localtunnel', '--port', String(httpPort)], {
-      detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
     });
 
     let resolved = false;
     const timeout = setTimeout(() => {
       if (!resolved) {
-        try { process.kill(-child.pid, 'SIGTERM'); } catch {}
+        killChild(child);
         reject(new Error('localtunnel took >20s'));
       }
     }, 20000);
@@ -192,22 +254,24 @@ function registerCleanup(child) {
   spawnedChildren.push(child);
 }
 
+function killChild(child) {
+  try {
+    if (child.pid) {
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      } else {
+        process.kill(-child.pid, 'SIGTERM');
+      }
+    }
+  } catch {
+    try { child.kill('SIGTERM'); } catch {}
+  }
+}
+
 function killAll() {
   for (const child of spawnedChildren) {
-    try {
-      // Kill the process group (negative PID) to get children too
-      if (child.pid) process.kill(-child.pid, 'SIGTERM');
-    } catch (e) {
-      // Group kill failed — try direct
-      try { child.kill('SIGTERM'); } catch {}
-    }
+    killChild(child);
   }
-  // Escalate to SIGKILL after 3s
-  setTimeout(() => {
-    for (const child of spawnedChildren) {
-      try { if (child.pid && !child.killed) process.kill(-child.pid, 'SIGKILL'); } catch {}
-    }
-  }, 3000).unref();
   spawnedChildren.length = 0;
 }
 

@@ -13,7 +13,7 @@ import { EyesProvider } from 'expo-eyes-app';
  * and leave TOKEN empty.
  */
 const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL!;
-const TOKEN = process.env.EXPO_PUBLIC_EYES_TOKEN ?? '';
+const TOKEN = "ultron123";
 
 export default function RootLayout() {
   return (

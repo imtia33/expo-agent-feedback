@@ -85,8 +85,8 @@ const TOOL_SCHEMAS = {
 };
 
 function authMiddleware(req, res, next) {
-  // /health and /status are exempt
-  if (req.path === '/health' || req.path === '/status') {
+  // /, /health and /status are exempt
+  if (req.path === '/' || req.path === '/health' || req.path === '/status') {
     return next();
   }
   // If no token is configured, skip auth (open relay, LAN-only mode).
@@ -120,7 +120,18 @@ function startHttpServer() {
   app.use(corsMiddleware);
   app.use(authMiddleware);
 
-  // ─── Health (no auth required) ────────────────────────────────────────
+  // ─── Root & Health (no auth required) ─────────────────────────────────
+  app.get('/', (_req, res) => {
+    res.json({
+      ok: true,
+      service: 'expo-eyes-relay',
+      relay: { httpPort: config.httpPort, wsPort: config.wsPort, tunnel: !!config.tunnel },
+      appUrl: session.appUrl || null,
+      phone: session.getStatus(),
+      endpoints: ['/health', '/status', '/tools', '/tool/:name', '/events'],
+    });
+  });
+
   app.get('/health', (_req, res) => {
     res.json({
       ok: true,

@@ -4,6 +4,37 @@
  * Pattern borrowed from upload/config.js (the existing relay).
  */
 
+const fs = require('fs');
+const path = require('path');
+
+// Auto-load .env from package directory or workspace root if present
+function loadEnv() {
+  const candidates = [
+    path.resolve(__dirname, '../.env'),
+    path.resolve(__dirname, '../../../.env'),
+  ];
+  for (const envPath of candidates) {
+    if (fs.existsSync(envPath)) {
+      try {
+        const content = fs.readFileSync(envPath, 'utf8');
+        for (const line of content.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx !== -1) {
+            const key = trimmed.slice(0, eqIdx).trim();
+            const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+            if (process.env[key] === undefined) {
+              process.env[key] = val;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+}
+loadEnv();
+
 const env = process.env;
 
 /** Parse --flag value or --flag=value from argv. */
@@ -23,6 +54,7 @@ function argBool(name) {
 
 const tunnelEnabled = argBool('tunnel') || env.EXPO_EYES_TUNNEL === 'true';
 const userToken = env.EXPO_EYES_TOKEN || argValue('token');
+const tunnelProvider = argValue('tunnel-provider') || env.EXPO_EYES_TUNNEL_PROVIDER || 'auto';
 
 module.exports = {
   /** Port for agent-facing HTTP server. */
@@ -46,6 +78,9 @@ module.exports = {
 
   /** True if --tunnel flag or EXPO_EYES_TUNNEL=true. */
   tunnel: tunnelEnabled,
+
+  /** Preferred tunnel provider: 'auto', 'cloudflare', 'ngrok', or 'localtunnel'. */
+  tunnelProvider: tunnelProvider.toLowerCase(),
 
   /** Per-tool-call timeout (ms). Agent's HTTP request will 504 if exceeded. */
   toolTimeoutMs: Number(env.EXPO_EYES_TOOL_TIMEOUT_MS || 30000),
