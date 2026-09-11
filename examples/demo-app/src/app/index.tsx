@@ -1,6 +1,6 @@
 import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
-import { useState, useRef } from 'react';
 import { Link } from 'expo-router';
+import { useState } from 'react';
 
 export default function HomeScreen() {
   const [count, setCount] = useState(0);
@@ -56,7 +56,7 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Navigation (test more screens)</Text>
+        <Text style={styles.sectionTitle}>Navigation</Text>
         <Link href="/list" asChild>
           <Pressable
             testID="go-to-list"
@@ -97,23 +97,10 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 20,
-    gap: 24,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginTop: 16,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 8,
-  },
-  section: {
-    gap: 8,
-  },
+  container: { padding: 20, gap: 24 },
+  title: { fontSize: 28, fontWeight: 'bold', marginTop: 16 },
+  subtitle: { fontSize: 14, color: '#666', marginBottom: 8 },
+  section: { gap: 8 },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
@@ -134,17 +121,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
-  secondaryButton: {
-    backgroundColor: '#666',
-  },
-  longPressButton: {
-    backgroundColor: '#a83232',
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  secondaryButton: { backgroundColor: '#666' },
+  longPressButton: { backgroundColor: '#a83232' },
+  buttonText: { color: 'white', fontSize: 16, fontWeight: '600' },
   input: {
     borderWidth: 1,
     borderColor: '#ccc',
@@ -152,9 +131,5 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
   },
-  echo: {
-    fontSize: 16,
-    color: '#444',
-    fontStyle: 'italic',
-  },
+  echo: { fontSize: 16, color: '#444', fontStyle: 'italic' },
 });

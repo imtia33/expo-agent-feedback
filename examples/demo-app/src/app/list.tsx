@@ -56,11 +56,7 @@ const styles = StyleSheet.create({
   backButton: { paddingVertical: 6, paddingHorizontal: 10 },
   backText: { color: '#0a7ea4', fontSize: 16, fontWeight: '600' },
   title: { fontSize: 17, fontWeight: 'bold' },
-  item: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
+  item: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee' },
   itemPressed: { backgroundColor: '#f5f5f5' },
   itemTitle: { fontSize: 16, fontWeight: '600' },
   itemSubtitle: { fontSize: 13, color: '#666', marginTop: 2 },
