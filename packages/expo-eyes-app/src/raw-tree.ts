@@ -250,7 +250,7 @@ async function readLayoutAsync(hostInstance: any): Promise<RawNode['layout'] | u
  * @param maxDepth safety cap (default 300 — must be > 150 for Expo Router)
  * @param maxNodes safety cap (default 5000)
  */
-export async function getRawTree(maxDepth = 300, maxNodes = 5000): Promise<RawNode | null> {
+export async function getRawTree(maxDepth = 200, maxNodes = 5000): Promise<RawNode | null> {
   fidCounter = 0; // reset for this walk
   const pendingLayouts: Array<{ node: RawNode; hostInstance: any }> = [];
 
