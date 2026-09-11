@@ -29,6 +29,14 @@ export interface ElementState {
 
 export interface TreeNode {
   ref: string;
+  /**
+   * Stable structural ID — survives re-renders. Use this when you want
+   * to refer to "the same element" across inspect() calls.
+   *   - "tid:saveBtn"  → testID-based (gold standard, set by dev)
+   *   - "h:7a3b2"      → structural hash (computed by SDK)
+   * Either can be passed as the `ref` argument to tap/type/etc.
+   */
+  stableId?: string;
   type: string;
   name?: string;
   text?: string;

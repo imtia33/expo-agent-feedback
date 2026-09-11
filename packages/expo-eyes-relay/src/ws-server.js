@@ -56,7 +56,8 @@ function startWsServer() {
           ws.close(4002, 'expected hello');
           return;
         }
-        if (msg.token !== config.token) {
+        // If config.token is set, enforce auth. If null, skip (open relay, LAN-only).
+        if (config.token !== null && msg.token !== config.token) {
           console.warn(`[ws] auth failed from ${ip} — token mismatch`);
           ws.send(JSON.stringify({ type: 'hello-ack', ok: false, reason: 'invalid token' }));
           ws.close(4003, 'invalid token');

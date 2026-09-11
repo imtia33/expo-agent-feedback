@@ -44,6 +44,106 @@ function refFor(fiber: object): string {
   return ref;
 }
 
+// ─── Stable ID (structural hash) ──────────────────────────────────────
+//
+// Computed from the path from root to this node, with each step contributing
+// its type + index. If a node has a testID, that dominates (testID is the
+// gold standard — set by the dev, guaranteed stable).
+//
+// Examples:
+//   "View>View#0>Pressable#Sign in"     → hash → "h7a3b2"
+//   "View>FlatList#0>Item#3:title=Foo"  → hash → "k9e1c4"
+//
+// Stable across re-renders as long as:
+//   - The tree structure doesn't change
+//   - The text/label/testID doesn't change
+//   - The position in parent (sibling index) doesn't change
+//
+// NOT stable if:
+//   - Siblings are inserted above this node (positional shift)
+//   - The text changes (e.g. counter value updates — by design)
+//   - List items reorder (each item's content changes)
+//
+// For testID'd elements, stableId === testID. Otherwise it's a 6-char hash.
+
+function fnv1aHash(str: string): string {
+  // FNV-1a 32-bit, returns 6-char base36 string.
+  // Simple, fast, no deps. Good enough for tree node identity.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  // Convert to unsigned 32-bit and then to base36 (6 chars max)
+  return (hash >>> 0).toString(36).padStart(6, '0').slice(-6);
+}
+
+/**
+ * Compute a stable ID for a fiber based on its structural identity.
+ * Walks up the parent chain building a path string, then hashes it.
+ */
+function stableIdFor(fiber: any): string | undefined {
+  if (!fiber) return undefined;
+
+  const props = fiber.memoizedProps || {};
+
+  // Golden path: if testID is set, use it directly.
+  if (typeof props.testID === 'string' && props.testID.length > 0) {
+    return `tid:${props.testID}`;
+  }
+
+  // Build the path from root to this node.
+  // Each step: type + sibling-index + (text or label if set).
+  const path: string[] = [];
+  let current: any = fiber;
+  let depth = 0;
+  while (current && depth < 20) { // cap depth to avoid pathological trees
+    const typeName = getTypeName(current);
+    const currentProps = current.memoizedProps || {};
+
+    // Best text identifier for this node
+    let ident: string = '';
+    if (typeof currentProps.accessibilityLabel === 'string' && currentProps.accessibilityLabel) {
+      ident = `:${currentProps.accessibilityLabel}`;
+    } else if (typeof currentProps['aria-label'] === 'string') {
+      ident = `:${currentProps['aria-label']}`;
+    } else if (typeof currentProps.children === 'string' && currentProps.children.length < 50) {
+      ident = `:${currentProps.children}`;
+    } else if (typeof currentProps.value === 'string' && currentProps.value.length < 50) {
+      // Skip — value changes too often (counter, input)
+    } else if (typeof currentProps.placeholder === 'string') {
+      ident = `:${currentProps.placeholder}`;
+    }
+
+    // Compute sibling index (position among same-typed siblings under this parent)
+    let siblingIndex = 0;
+    let sibling = current.sibling;
+    while (sibling) {
+      siblingIndex++;
+      sibling = sibling.sibling;
+    }
+
+    path.unshift(`${typeName}#${siblingIndex}${ident}`);
+    current = current.return;
+    depth++;
+  }
+
+  return 'h:' + fnv1aHash(path.join('>'));
+}
+
+function getTypeName(fiber: any): string {
+  const fiberType = fiber?.elementType;
+  return (
+    (typeof fiberType === 'string' && fiberType) ||
+    fiberType?.displayName ||
+    fiberType?.name ||
+    (typeof fiber.type === 'string' && fiber.type) ||
+    fiber.type?.displayName ||
+    fiber.type?.name ||
+    'Unknown'
+  );
+}
+
 // ─── Host component type names ────────────────────────────────────────
 
 const HOST_TYPES = new Set([
@@ -278,6 +378,7 @@ function serializeFiber(fiber: any, iface: any, ctx: SerializeContext): TreeNode
   ctx.nodesEmitted++;
 
   const ref = refFor(fiber);
+  const stableId = stableIdFor(fiber);
   const fiberType = fiber?.elementType;
   const typeName =
     (typeof fiberType === 'string' && fiberType) ||
@@ -294,6 +395,7 @@ function serializeFiber(fiber: any, iface: any, ctx: SerializeContext): TreeNode
 
   const node: TreeNode = {
     ref,
+    stableId,
     type: typeName,
     children: [],
   };
@@ -429,6 +531,7 @@ function serializeFiberDeep(
 
   ctx.nodesEmitted++;
   const ref = refFor(fiber);
+  const stableId = stableIdFor(fiber);
   const fiberType = fiber?.elementType;
   const typeName =
     (typeof fiberType === 'string' && fiberType) ||
@@ -444,6 +547,7 @@ function serializeFiberDeep(
 
   const node: TreeNode = {
     ref,
+    stableId,
     type: typeName,
     children: [],
   };
@@ -548,10 +652,24 @@ function extractWhitelistedProps(fiber: any): Record<string, any> | undefined {
 
 // ─── Find fiber by ref (for tap/type/scroll tools) ────────────────────
 
+/**
+ * Find a fiber by ref ID OR stableId. Accepts:
+ *   - "r5"          → positional ref (from inspect/snapshot output)
+ *   - "tid:saveBtn" → testID-based stableId
+ *   - "h:7a3b2"     → structural hash stableId
+ *
+ * Used by tap/type/scrollTo/etc. — the agent can pass whichever it has.
+ */
 export function findFiberByRef(refId: string): { fiber: any; iface: any } | null {
   let found: { fiber: any; iface: any } | null = null;
   walkFibers((fiber, iface) => {
+    // Try positional ref first (fast — WeakMap lookup)
     if (refFor(fiber) === refId) {
+      found = { fiber, iface };
+      return false;
+    }
+    // Then try stableId
+    if (stableIdFor(fiber) === refId) {
       found = { fiber, iface };
       return false;
     }

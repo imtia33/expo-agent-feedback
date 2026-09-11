@@ -85,8 +85,12 @@ const TOOL_SCHEMAS = {
 };
 
 function authMiddleware(req, res, next) {
-  // /health is exempt
+  // /health and /status are exempt
   if (req.path === '/health' || req.path === '/status') {
+    return next();
+  }
+  // If no token is configured, skip auth (open relay, LAN-only mode).
+  if (config.token === null) {
     return next();
   }
   const auth = req.get('Authorization') || '';

@@ -3,11 +3,13 @@
  * expo-eyes-relay — CLI entry point.
  *
  * Usage:
- *   npx expo-eyes-relay [--token TOKEN] [--http-port PORT] [--ws-port PORT]
- *                       [--host ADDR] [--verbose]
+ *   npx expo-eyes-relay [--token TOKEN] [--tunnel] [--http-port PORT]
+ *                       [--ws-port PORT] [--host ADDR] [--verbose]
  *
- * If --token is not provided, a random token is generated, printed, and
- * saved to ~/.expo-eyes-token so subsequent runs reuse it.
+ * Token behavior:
+ *   - No --tunnel, no --token → open relay, no auth (easy local dev on LAN)
+ *   - --tunnel, no --token    → refuse to start (security: tunnel is public)
+ *   - --token TOKEN           → enforce auth on WS + HTTP
  *
  * Pattern verified against:
  *   - ws 8.21.3        (docs/libraries/ws-API-summary.md)
@@ -27,22 +29,12 @@ const TOKEN_FILE = path.join(os.homedir(), '.expo-eyes-token');
 
 function loadOrCreateToken() {
   if (config.token) return config.token;
-  // Try to load from file
-  try {
-    if (fs.existsSync(TOKEN_FILE)) {
-      const saved = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
-      if (saved) return saved;
-    }
-  } catch {}
-  // Generate new
-  const token = crypto.randomBytes(24).toString('hex');
-  try {
-    fs.writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
-    console.log(`[relay] token saved to ${TOKEN_FILE} (mode 600)`);
-  } catch (e) {
-    console.warn(`[relay] could not save token to ${TOKEN_FILE}: ${e.message}`);
+  // If tunneling, we MUST have a token — refuse to start without one.
+  if (config.tunnel) {
+    return null;
   }
-  return token;
+  // No token + no tunnel → return null (open relay, LAN-only).
+  return null;
 }
 
 function printBanner(token) {
@@ -53,25 +45,49 @@ function printBanner(token) {
   console.log(`║  HTTP (agent):  http://${config.host}:${config.httpPort}`.padEnd(67) + '║');
   console.log(`║  WS   (phone):  ws://${config.host}:${config.wsPort}`.padEnd(67) + '║');
   console.log('╠══════════════════════════════════════════════════════════════════╣');
-  console.log('║  Auth token (use in Authorization: Bearer <token>):              ║');
-  console.log('║                                                                  ║');
-  console.log('║  ' + token.padEnd(63) + '║');
-  console.log('║                                                                  ║');
+
+  if (token) {
+    console.log('║  Auth: Bearer token required (Authorization: Bearer <token>)     ║');
+    console.log('║                                                                  ║');
+    console.log('║  ' + token.padEnd(63) + '║');
+    console.log('║                                                                  ║');
+  } else {
+    console.log('║  Auth: DISABLED (open relay, LAN-only)                           ║');
+    console.log('║  ⚠️  Do not use this mode with --tunnel. Anyone with the URL     ║');
+    console.log('║     could control your phone.                                    ║');
+  }
+
   console.log('╚══════════════════════════════════════════════════════════════════╝');
   console.log('');
-  console.log('In your Expo app:');
-  console.log(`  <EyesProvider relayUrl="ws://YOUR_LAPTOP_IP:${config.wsPort}" token="${token}">`);
+  console.log('In your Expo app (replace YOUR_LAN_IP):');
+  if (token) {
+    console.log(`  <EyesProvider relayUrl="ws://YOUR_LAN_IP:${config.wsPort}" token="${token}">`);
+  } else {
+    console.log(`  <EyesProvider relayUrl="ws://YOUR_LAN_IP:${config.wsPort}" token="">>`);
+  }
   console.log('');
   console.log('From an agent (curl):');
-  console.log(`  curl -H "Authorization: Bearer ${token}" \\`);
-  console.log(`       http://YOUR_LAPTOP_IP:${config.httpPort}/health`);
+  if (token) {
+    console.log(`  curl -H "Authorization: Bearer ${token}" \\`);
+    console.log(`       http://YOUR_LAN_IP:${config.httpPort}/health`);
+  } else {
+    console.log(`  curl http://YOUR_LAN_IP:${config.httpPort}/health`);
+  }
   console.log('');
 }
 
 function main() {
-  // Ensure we have a token
+  // Validate: --tunnel requires --token
+  if (config.tunnel && !config.token) {
+    console.error('[relay] ERROR: --tunnel requires --token.');
+    console.error('[relay] The tunnel exposes the relay publicly; without a token,');
+    console.error('[relay] anyone with the URL could control your phone.');
+    console.error('[relay] Run again with: --tunnel --token=$(openssl rand -hex 24)');
+    process.exit(1);
+  }
+
   const token = loadOrCreateToken();
-  config.token = token;
+  config.token = token; // could be null
 
   // Subscribe session events to log
   session.subscribe((event, data) => {

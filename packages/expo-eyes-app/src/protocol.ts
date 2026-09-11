@@ -86,6 +86,14 @@ export type ToolName =
 export interface TreeNode {
   /** Stable opaque ID within the current inspection session. Use as ref. */
   ref: string;
+  /**
+   * Stable structural hash (6 chars), survives across inspect() calls and
+   * re-renders. Computed from type + text + label + testID + path from root.
+   * Use this when you want to refer to "the same element" across calls
+   * even if its positional ref changes.
+   * Falls back to testID if set (testID is the gold standard).
+   */
+  stableId?: string;
   /** Component type, e.g. 'View', 'Text', 'Pressable', 'TextInput', 'FlatList'. */
   type: string;
   /** Display name for composite components, e.g. 'SignInForm'. */

@@ -39,6 +39,7 @@ export const ElementStateSchema = z.object({
 // We use a forward-declared type with z.lazy to break the cycle.
 export type TreeNodeRaw = {
   ref: string;
+  stableId?: string;
   type: string;
   name?: string;
   text?: string;
@@ -58,6 +59,7 @@ export type TreeNodeRaw = {
 export const TreeNodeSchema: z.ZodType<TreeNodeRaw> = z.lazy(() =>
   z.object({
     ref: z.string(),
+    stableId: z.string().optional(),
     type: z.string(),
     name: z.string().optional(),
     text: z.string().optional(),
