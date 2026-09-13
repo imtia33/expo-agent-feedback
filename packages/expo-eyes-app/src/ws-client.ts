@@ -10,12 +10,18 @@
 
 import { Platform } from 'react-native';
 
+// Stable-per-process device identity so the relay can keep MULTIPLE phones
+// (e.g. two Androids) connected at once. A full app reload drops the old WS
+// anyway, so a per-process random ID is sufficient for dedupe.
+const DEVICE_ID = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 const RECONNECT_DELAYS = [500, 1000, 2000, 5000, 10000, 30000];
 
 export class WSClient {
   private ws: WebSocket | null = null;
   private url: string;
   private token: string;
+  private deviceName: string;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isClosed = false;
@@ -29,9 +35,10 @@ export class WSClient {
   /** Called when the connection drops. */
   onClose: (() => void) | null = null;
 
-  constructor(url: string, token: string) {
+  constructor(url: string, token: string, deviceName: string = '') {
     this.url = url;
     this.token = token;
+    this.deviceName = deviceName;
   }
 
   connect() {
@@ -45,7 +52,7 @@ export class WSClient {
 
     this.ws.onopen = () => {
       this.reconnectAttempt = 0;
-      // Send hello with auth token
+      // Send hello with auth token + device identity (multi-phone support)
       this.rawSend(
         JSON.stringify({
           type: 'hello',
@@ -53,6 +60,8 @@ export class WSClient {
           app: {
             name: Platform.OS,
             sdkVersion: 'unknown',
+            deviceId: DEVICE_ID,
+            deviceName: this.deviceName || undefined,
           },
         }),
       );

@@ -13,6 +13,32 @@ const { WebSocketServer } = require('ws');
 const config = require('./config');
 const session = require('./session-manager');
 
+// ─── Heartbeat ────────────────────────────────────────────────────────
+//
+// Protocol-level ping every 30s. If a phone fails to pong within 10s we
+// terminate the socket so (a) onPhoneDisconnected fires, (b) the phone's
+// auto-reconnect kicks in, and (c) phoneConnected never lies about zombies.
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_TIMEOUT_MS = 10_000;
+
+function startHeartbeat(wss) {
+  const timer = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (ws.__eyesDead) {
+        try { ws.terminate(); } catch {}
+        continue;
+      }
+      ws.__eyesDead = true;
+      try { ws.ping(); } catch {}
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+}
+
+function trackPong(ws) {
+  ws.on('pong', () => { ws.__eyesDead = false; });
+}
+
 function startWsServer() {
   const wss = new WebSocketServer({
     port: config.wsPort,
@@ -22,6 +48,7 @@ function startWsServer() {
   wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
     console.log(`[ws] phone connecting from ${ip}`);
+    trackPong(ws);
 
     let authenticated = false;
     let helloTimeout = setTimeout(() => {
@@ -101,6 +128,7 @@ function startWsServer() {
 
   wss.on('listening', () => {
     console.log(`[ws] phone-facing server listening on ws://${config.host}:${config.wsPort}`);
+    startHeartbeat(wss);
   });
 
   wss.on('error', (e) => {

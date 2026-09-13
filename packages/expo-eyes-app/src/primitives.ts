@@ -57,6 +57,10 @@ export interface VisibleElement {
   props: Record<string, any>;
   /** Depth in the hierarchy (root = 0). */
   depth: number;
+  /** Ancestor chain WITH native viewTags (innermost last). Present for
+   *  grid-scanned (on-screen) elements — lets agents press pressable
+   *  ancestors of text/icon nodes without re-resolving fibers. */
+  hierarchyTags?: Array<{ name: string; viewTag: number }>;
 }
 
 export interface InspectAtPointResult {
@@ -189,12 +193,13 @@ export async function listVisibleElements(args: { step?: number } = {}): Promise
   for (let y = step; y < screen.height; y += step) {
     for (let x = step; x < screen.width; x += step) {
       scanned++;
-      try {
-        const { element } = await inspectAtPoint({ x, y });
+      const { element, hierarchy: hWithTags } = await inspectAtPoint({ x, y });
         if (element && element.viewTag && !seen.has(element.viewTag)) {
+          if (hWithTags && hWithTags.length > 0) {
+            (element as any).hierarchyTags = hWithTags;
+          }
           seen.set(element.viewTag, element);
         }
-      } catch {}
     }
   }
 
@@ -290,7 +295,7 @@ export interface DispatchEventArgs {
   y?: number;
 }
 
-export async function dispatchEvent(args: DispatchEventArgs): Promise<{ ok: boolean }> {
+export async function dispatchEvent(args: DispatchEventArgs): Promise<{ ok: boolean; debug?: any }> {
   const { viewTag, event, text, durationMs, x, y } = args;
   if (typeof viewTag !== 'number') throw Object.assign(new Error('viewTag is required (number)'), { code: 'BAD_ARGS' });
 
@@ -325,6 +330,23 @@ export async function dispatchEvent(args: DispatchEventArgs): Promise<{ ok: bool
   const targetFiber = pressableFiber || textInputFiber || fiber;
   const props = targetFiber.memoizedProps || {};
   const syntheticEvent = makeSyntheticEvent(x, y);
+
+  // Debug info: what did we resolve and what handlers exist? Helps agents
+  // understand why a press "succeeded" but did nothing.
+  const debug: any = {
+    fiberFound: !!fiber,
+    fiberName: fiber?.type ? (typeof fiber.type === 'string' ? fiber.type : fiber.type?.displayName || fiber.type?.name || 'anonymous') : undefined,
+    pressableFound: !!pressableFiber,
+    pressableName: pressableFiber?.type ? (typeof pressableFiber.type === 'string' ? pressableFiber.type : pressableFiber.type?.displayName || pressableFiber.type?.name || 'anonymous') : undefined,
+    textInputFound: event.startsWith('change') ? !!textInputFiber : undefined,
+    handlers: {
+      onPress: typeof props.onPress === 'function',
+      onPressIn: typeof props.onPressIn === 'function',
+      onPressOut: typeof props.onPressOut === 'function',
+      onLongPress: typeof props.onLongPress === 'function',
+      onChangeText: typeof props.onChangeText === 'function',
+    },
+  };
 
   switch (event) {
     case 'press':
@@ -367,7 +389,7 @@ export async function dispatchEvent(args: DispatchEventArgs): Promise<{ ok: bool
       throw Object.assign(new Error(`Unknown event: ${event}`), { code: 'BAD_ARGS' });
   }
 
-  return { ok: true };
+  return { ok: true, debug };
 }
 
 // ─── scroll / scrollToIndex (by viewTag) ──────────────────────────────
@@ -775,6 +797,32 @@ function extractTestIDFromHierarchy(hierarchy: any[]): string | undefined {
     } catch {}
   }
   return undefined;
+}
+
+// ─── ping ─────────────────────────────────────────────────────────────
+//
+// Liveness probe: relay → phone → back. Responds instantly (no tree scan,
+// no inspector calls). Used by the relay's GET /ping endpoint to verify the
+// FULL chain is alive and measure round-trip latency.
+
+export async function ping(): Promise<{
+  pong: true;
+  phoneTime: number;
+  uptimeMs: number;
+  appState: string;
+}> {
+  let appState = 'unknown';
+  try {
+    // Optional dep — may not exist in all runtimes
+    const { AppState } = require('react-native');
+    appState = AppState.currentState || 'unknown';
+  } catch {}
+  return {
+    pong: true,
+    phoneTime: Date.now(),
+    uptimeMs: Math.round((globalThis as any).performance?.now?.() ?? 0),
+    appState,
+  };
 }
 
 // ─── diagnostics ──────────────────────────────────────────────────────

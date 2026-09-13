@@ -47,6 +47,7 @@ import {
   assertText,
   assertEnabled,
   pinch,
+  ping,
 } from './primitives';
 
 export interface EyesProviderProps {
@@ -80,6 +81,7 @@ const PRIMITIVES = new Set([
   'assertText',
   'assertEnabled',
   'pinch',
+  'ping',
 ]);
 
 const HANDLERS: Record<string, (args: any) => Promise<any>> = {
@@ -100,7 +102,20 @@ const HANDLERS: Record<string, (args: any) => Promise<any>> = {
   assertText,
   assertEnabled,
   pinch,
+  ping,
 };
+
+// Best-effort device label for multi-phone sessions (Expo Go reports the
+// device name, e.g. "V2333 - 16 - API 36"). Falls back to empty string.
+function resolveDeviceName(): string {
+  try {
+    // Dynamic require — expo-constants ships inside the host app's expo package
+    const Constants: any = require('expo-constants');
+    return Constants?.default?.deviceName || Constants?.deviceName || Constants?.default?.expoConfig?.name || '';
+  } catch {
+    return '';
+  }
+}
 
 export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }: EyesProviderProps) {
   const clientRef = useRef<WSClient | null>(null);
@@ -136,7 +151,7 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
 
     attachDevToolsHook();
 
-    const client = new WSClient(relayUrl, token);
+    const client = new WSClient(relayUrl, token, resolveDeviceName());
     clientRef.current = client;
 
     client.onReady = () => setStatus('connected');

@@ -44,6 +44,14 @@ const VALID_TOOLS = new Set([
   'assertText',
   'assertEnabled',
   'pinch',
+  'visibleText',
+  'tapText',
+  'tapXY',
+  'clickables',
+  'fill',
+  'waitGone',
+  'find',
+  'scrollIntoView',
 ]);
 
 const TOOL_SCHEMAS = {
@@ -171,6 +179,61 @@ const TOOL_SCHEMAS = {
     },
     returns: '{ ok, passed, message }',
   },
+  visibleText: {
+    description: 'Lean on-screen inventory: text/value/placeholder/role/testID with REAL frames. Use this instead of raw inspect() + JSON parsing.',
+    args: {},
+    returns: '{ count, elements: [{ ref, name, text, value, placeholder, role, testID, disabled, frame }] }',
+  },
+  tapText: {
+    description: 'Find a visible element by exact text (or contains) and press it. Verifies the screen actually changed; retries up the view hierarchy (icons/labels inside Pressables).',
+    args: { text: 'string (exact match)', contains: 'string (substring, fallback)', index: 'number (default 0)', role: 'string (accessibilityRole filter)', verify: 'boolean (default true — screen-change check)' },
+    returns: '{ ok, tapped, matchCount, pressed, screenChanged }',
+  },
+  tapXY: {
+    description: 'Press whatever is at a screen point — deepest element containing (x,y), then its pressable ancestors. Use for icon-only buttons (no text).',
+    args: { x: 'number (required)', y: 'number (required)', verify: 'boolean (default true)' },
+    returns: '{ ok, tapped, candidates, pressed, screenChanged }',
+  },
+  clickables: {
+    description: 'Inventory of tappable-looking elements (accessibilityRole button/tab/etc or pressable-ish names) with refs and frames.',
+    args: {},
+    returns: '{ count, elements: [{ ref, name, text, role, frame }] }',
+  },
+  fill: {
+    description: 'Find a visible TextInput by placeholder/value/text and set its value (fires onChangeText). No ref hunting.',
+    args: { text: 'string (REQUIRED — the new value)', placeholder: 'string (substring match on placeholder)', contains: 'string (substring match on current value)', value: 'string (exact match on current value)', index: 'number (default 0)' },
+    returns: '{ ok, filled, newValue, matchCount }',
+  },
+  waitGone: {
+    description: 'Poll until a text (exact or contains) disappears from the screen — sheet dismissed, alert cleared, navigation happened.',
+    args: { text: 'string (exact)', contains: 'string (substring)', timeoutMs: 'number (default 5000)' },
+    returns: '{ ok, gone, elapsedMs }',
+  },
+  find: {
+    description: 'Search visible elements without tapping: filter by text (substring on text+accessibilityLabel), testID, name, role, pressable. Use to locate icons/inputs and get refs before acting.',
+    args: {
+      text: 'string (optional — substring on text or accessibilityLabel)',
+      testID: 'string (optional — substring on testID)',
+      name: 'string (optional — component type substring, e.g. "Pressable")',
+      role: 'string (optional — exact accessibilityRole)',
+      pressable: 'boolean (default false — only likely-tappable elements)',
+      refresh: 'boolean (default false — force re-scan)',
+      limit: 'number (default 10, max 50)',
+    },
+    returns: '{ count, matches: [{ ref, name, text, value, placeholder, role, testID, disabled, frame, viewTag, onScreen }] }',
+  },
+  scrollIntoView: {
+    description: 'Swipe-scroll until an element (text/contains/testID/ref) is on screen; returns its ref+frame. Throws NOT_VISIBLE if it never becomes visible (says whether it was found-but-offscreen vs not-in-tree).',
+    args: {
+      text: 'string (exact first, then substring fallback)',
+      contains: 'string (substring)',
+      testID: 'string (substring)',
+      ref: 'string (r-style ref)',
+      maxSwipes: 'number (default 8, max 20)',
+      swipeDistance: 'number (default 500 px per swipe)',
+    },
+    returns: '{ ok, found: { ref, name, text, frame, viewTag, onScreen }, swipes }',
+  },
   pinch: {
     description: 'Pinch/zoom gesture (multi-touch). For maps/images with zoom support.',
     args: {
@@ -185,8 +248,8 @@ const TOOL_SCHEMAS = {
 };
 
 function authMiddleware(req, res, next) {
-  // /, /health, /status, /diagnostics are exempt (diagnostics is read-only)
-  if (req.path === '/' || req.path === '/health' || req.path === '/status' || req.path === '/diagnostics') {
+  // /, /health, /status, /ping, /diagnostics are exempt (read-only monitoring)
+  if (req.path === '/' || req.path === '/health' || req.path === '/status' || req.path === '/ping' || req.path === '/diagnostics') {
     return next();
   }
   // If no token is configured, skip auth (open relay, LAN-only mode).
@@ -255,6 +318,29 @@ function startHttpServer() {
     res.json(session.getStatus());
   });
 
+  // ─── Ping (end-to-end liveness: relay → WS → phone → back) ─────────
+  app.get('/ping', async (req, res) => {
+    const timeoutMs = Math.min(parseInt(req.query.timeout, 10) || 4000, 10000);
+    const result = await session.pingPhone(req.query.session || undefined, timeoutMs);
+    const status = session.getStatus();
+    const ok = result.phoneReplied === true;
+    res.json({
+      ok,
+      ...result,
+      phones: status.phones,
+      pendingCalls: status.pendingCalls,
+      hint: ok
+        ? undefined
+        : result.phoneConnected
+          ? 'WS open but phone did not answer ping — app likely frozen/backgrounded or SDK too old (no ping primitive); reload the app'
+          : status.phones.length > 0
+            ? 'WS entries exist but none OPEN — zombie connections, wait for heartbeat prune or restart relay'
+            : (result.lastDisconnect
+              ? `No phone connected (last disconnect ${Math.round(result.lastDisconnect.agoMs / 1000)}s ago). Open the app in Expo Go / bring it to foreground — the client auto-reconnects`
+              : 'No phone has ever connected to this relay. Check the app is running and relayUrl/token match'),
+    });
+  });
+
   // ─── Tool list ────────────────────────────────────────────────────────
   app.get('/tools', (_req, res) => {
     res.json({
@@ -278,9 +364,16 @@ function startHttpServer() {
 
     const args = req.body || {};
 
+    // Multi-phone targeting: ?session=<sessionId> routes this call to a
+    // specific phone (from /health's phones[].sessionId). Omit = active phone.
+    const targetSession = req.query.session || req.query.sessionId || null;
+
     // The phone-call function passed to tool-router.
     // It calls session.callTool (low-level primitive call to the phone).
-    const phoneCall = (primitive, primArgs) => session.callTool(primitive, primArgs);
+    const phoneCall = (primitive, primArgs) =>
+      targetSession
+        ? session.callToolOn(targetSession, primitive, primArgs)
+        : session.callTool(primitive, primArgs);
 
     try {
       // Dispatch to the right tool-router function
@@ -304,6 +397,14 @@ function startHttpServer() {
         case 'assertText':  result = await require('./tool-router').assertText(phoneCall, args); break;
         case 'assertEnabled': result = await require('./tool-router').assertEnabled(phoneCall, args); break;
         case 'pinch':       result = await require('./tool-router').pinch(phoneCall, args); break;
+        case 'visibleText': result = await require('./tool-router').visibleText(phoneCall); break;
+        case 'tapText':     result = await require('./tool-router').tapText(phoneCall, args); break;
+        case 'tapXY':       result = await require('./tool-router').tapXY(phoneCall, args); break;
+        case 'clickables':  result = await require('./tool-router').clickables(phoneCall); break;
+        case 'fill':        result = await require('./tool-router').fill(phoneCall, args); break;
+        case 'waitGone':    result = await require('./tool-router').waitGone(phoneCall, args); break;
+        case 'find':        result = await require('./tool-router').find(phoneCall, args); break;
+        case 'scrollIntoView': result = await require('./tool-router').scrollIntoView(phoneCall, args); break;
         default:
           return res.status(404).json({ error: 'unknown_tool', message: `Tool ${tool} not in router` });
       }

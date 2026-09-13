@@ -219,8 +219,8 @@ async function snapshot(phoneCall, args) {
 
 async function tap(phoneCall, args) {
   const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
-  await phoneCall('dispatchEvent', { viewTag, event: 'press' });
-  return { ok: true };
+  const result = await phoneCall('dispatchEvent', { viewTag, event: 'press' });
+  return { ok: true, debug: result?.debug };
 }
 
 async function longPress(phoneCall, args) {
@@ -425,6 +425,261 @@ async function pinch(phoneCall, args) {
   return { ok: result.ok };
 }
 
+// ═══ COMPOSITE TOOLS (agent convenience layer) ═══════════════════════
+//
+// These exist so agents never have to pull raw inspect() JSON and parse
+// it by hand. Rule of thumb: if an agent repeats a multi-step dance twice,
+// promote it into a composite tool here.
+//   visibleText  — lean on-screen inventory with REAL frames
+//   tapText      — find element by text and press it (with verify + ancestor retry)
+//   tapXY        — press whatever is at a screen point (deepest containing element)
+//   clickables   — inventory of tappable-looking elements (roles/names)
+//   fill         — find a TextInput by placeholder/value and set its text
+//   waitGone     — poll until a text disappears (sheet dismissed, alert cleared)
+
+const TAPPABLE_ROLES = new Set(['button', 'tab', 'menuitem', 'adjustable', 'link', 'checkbox', 'radio', 'switch']);
+
+function projectElement(e, i) {
+  return {
+    ref: `r${i}`,
+    name: e.name,
+    text: e.props?.text ?? e.props?.title ?? undefined,
+    value: e.props?.value ?? undefined,
+    placeholder: e.props?.placeholder ?? undefined,
+    role: e.props?.accessibilityRole ?? undefined,
+    testID: e.props?.testID ?? undefined,
+    disabled: e.props?.disabled === true ? true : undefined,
+    frame: e.frame,
+    viewTag: e.viewTag,
+  };
+}
+
+function frameVisible(f) {
+  return f && typeof f.width === 'number' && typeof f.height === 'number' && (f.width > 0 || f.height > 0);
+}
+
+function norm(s) {
+  return (s ?? '').toString().toLowerCase();
+}
+
+function textOf(e) {
+  return e.props?.text ?? e.props?.value ?? e.props?.title ?? '';
+}
+
+async function visibleText(phoneCall) {
+  const elements = await fetchElements(phoneCall, true);
+  const rows = elements
+    .map(projectElement)
+    .filter((e) => (e.text || e.value || e.placeholder || e.role || e.testID) && frameVisible(e.frame));
+  return { count: rows.length, elements: rows };
+}
+
+async function clickables(phoneCall) {
+  const elements = await fetchElements(phoneCall, true);
+  const rows = elements
+    .map(projectElement)
+    .filter((e) => TAPPABLE_ROLES.has(e.role) || /pressable|button|chip|tabitem/i.test(e.name || ''));
+  return { count: rows.length, elements: rows };
+}
+
+function findMatches(elements, { text, contains, role, placeholder, value }) {
+  let matches = elements;
+  if (text != null) {
+    matches = matches.filter((e) => norm(textOf(e)) === norm(text));
+  }
+  if (matches.length === 0 && contains != null) {
+    matches = matches.filter((e) => norm(textOf(e)).includes(norm(contains)));
+  }
+  if (role != null) matches = matches.filter((e) => norm(e.props?.accessibilityRole) === norm(role));
+  if (placeholder != null) matches = matches.filter((e) => norm(e.props?.placeholder).includes(norm(placeholder)));
+  if (value != null) matches = matches.filter((e) => norm(e.props?.value) === norm(value));
+  return matches;
+}
+
+function screenFingerprint(elements) {
+  return elements.map((e) => [textOf(e), e.frame?.x, e.frame?.y, e.frame?.width, e.frame?.height].join(',')).join('|');
+}
+
+// Try pressing a viewTag, then (optionally) its hierarchy ancestors until the
+// screen visibly changes. Handles cases where the deepest element itself has
+// no handler (icons, labels inside Pressable/TabTrigger wrappers).
+async function pressWithRetry(phoneCall, element, { verify = false, maxAncestors = 8 } = {}) {
+  const attempts = [{ viewTag: element.viewTag, source: 'self' }];
+  const hierarchyTags = element.hierarchyTags || [];
+  for (let i = hierarchyTags.length - 1; i >= 0 && attempts.length < maxAncestors; i--) {
+    const h = hierarchyTags[i];
+    if (h?.viewTag && h.viewTag !== element.viewTag) attempts.push({ viewTag: h.viewTag, source: `ancestor[${i}] ${h.name || ''}` });
+  }
+
+  const before = verify ? screenFingerprint(await fetchElements(phoneCall, true)) : null;
+  const debugs = [];
+
+  for (const attempt of attempts) {
+    try {
+      const res = await phoneCall('dispatchEvent', { viewTag: attempt.viewTag, event: 'press' });
+      if (res?.debug) debugs.push({ tried: attempt.source, ...res.debug });
+    } catch (e) {
+      debugs.push({ tried: attempt.source, error: e.message });
+      continue; // stale tag / no handler — try next ancestor
+    }
+    resetCache();
+    if (!verify) return { ok: true, pressed: attempt.source };
+    await sleep(500);
+    const after = screenFingerprint(await fetchElements(phoneCall, true));
+    if (after !== before) return { ok: true, pressed: attempt.source, screenChanged: true, debug: debugs };
+  }
+  if (!verify) return { ok: true, pressed: attempts[0].source };
+  return { ok: false, error: 'press dispatched but screen did not change', tried: attempts.map((a) => a.source), debug: debugs };
+}
+
+async function tapText(phoneCall, args) {
+  const elements = await fetchElements(phoneCall, true);
+  const matches = findMatches(elements, { text: args.text, contains: args.contains, role: args.role });
+  if (matches.length === 0) {
+    return { ok: false, error: `no visible element matching text=${JSON.stringify(args.text)} contains=${JSON.stringify(args.contains)}` };
+  }
+  const idx = Math.min(args.index ?? 0, matches.length - 1);
+  const pick = matches[idx];
+  const res = await pressWithRetry(phoneCall, pick, { verify: args.verify !== false });
+  return { ok: res.ok, tapped: projectElement(pick, elements.indexOf(pick)), matchCount: matches.length, ...res };
+}
+
+async function tapXY(phoneCall, args) {
+  const { x, y } = args;
+  if (typeof x !== 'number' || typeof y !== 'number') {
+    throw Object.assign(new Error('tapXY requires numeric x and y'), { code: 'BAD_ARGS' });
+  }
+  const elements = await fetchElements(phoneCall, true);
+  const containing = elements.filter((e) => {
+    const f = e.frame;
+    return frameVisible(f) && x >= f.x && x <= f.x + f.width && y >= f.y && y <= f.y + f.height;
+  });
+  if (containing.length === 0) {
+    return { ok: false, error: `no element at point (${x}, ${y})` };
+  }
+  // Deepest = smallest area wins.
+  const deepest = containing.reduce((a, b) => (a.frame.width * a.frame.height <= b.frame.width * b.frame.height ? a : b));
+  const res = await pressWithRetry(phoneCall, deepest, { verify: args.verify !== false });
+  return { ok: res.ok, tapped: projectElement(deepest, elements.indexOf(deepest)), candidates: containing.length, ...res };
+}
+
+async function fill(phoneCall, args) {
+  const elements = await fetchElements(phoneCall, true);
+  const inputs = elements.filter(
+    (e) => /textinput|textfield|textview/i.test(e.name || '') || e.props?.accessibilityRole === 'textinput' || e.props?.placeholder != null
+  );
+  if (inputs.length === 0) return { ok: false, error: 'no TextInput visible', hint: 'maybe keyboard covers it — scroll or check screen' };
+  const matches = findMatches(inputs, { contains: args.contains, placeholder: args.placeholder, value: args.value });
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      error: 'no matching TextInput',
+      inputCount: inputs.length,
+      inputs: inputs.map((e) => projectElement(e, elements.indexOf(e))),
+    };
+  }
+  const idx = Math.min(args.index ?? 0, matches.length - 1);
+  const pick = matches[idx];
+  await phoneCall('dispatchEvent', { viewTag: pick.viewTag, event: 'changeText', text: args.text });
+  resetCache();
+  return { ok: true, filled: projectElement(pick, elements.indexOf(pick)), newValue: args.text, matchCount: matches.length };
+}
+
+async function waitGone(phoneCall, args) {
+  const { text, contains, timeoutMs = 5000 } = args;
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const elements = await fetchElements(phoneCall, true);
+    const still = elements.find((e) => (text != null ? norm(textOf(e)) === norm(text) : norm(textOf(e)).includes(norm(contains))));
+    if (!still) return { ok: true, gone: true, elapsedMs: Date.now() - t0 };
+    await sleep(300);
+  }
+  return { ok: false, gone: false, error: `text still visible after ${timeoutMs}ms` };
+}
+
+// ── find — targeted search without tapping (tapText presses; find just looks) ──
+
+async function find(phoneCall, args) {
+  const elements = await fetchElements(phoneCall, args.refresh === true);
+  let matches = elements;
+  if (args.text != null) {
+    const n = norm(args.text);
+    matches = matches.filter((e) => norm(textOf(e)).includes(n) || norm(e.props?.accessibilityLabel).includes(n));
+  }
+  if (args.testID != null) matches = matches.filter((e) => norm(e.props?.testID).includes(norm(args.testID)));
+  if (args.name != null) matches = matches.filter((e) => norm(e.name).includes(norm(args.name)));
+  if (args.role != null) matches = matches.filter((e) => norm(e.props?.accessibilityRole) === norm(args.role));
+  if (args.pressable === true) {
+    matches = matches.filter((e) => TAPPABLE_ROLES.has(e.props?.accessibilityRole) || /pressable|button|chip|tabitem|touchable/i.test(e.name || ''));
+  }
+  const limit = Math.min(args.limit ?? 10, 50);
+  matches = matches.slice(0, limit);
+  return {
+    count: matches.length,
+    matches: matches.map((e) => ({ ...projectElement(e, elements.indexOf(e)), onScreen: frameVisible(e.frame) })),
+  };
+}
+
+// ── scrollIntoView — swipe until an element is on screen, then return its ref ──
+
+async function scrollIntoView(phoneCall, args) {
+  if (args.text == null && args.contains == null && args.testID == null && !args.ref) {
+    throw Object.assign(new Error('scrollIntoView needs "text", "contains", "testID" or "ref"'), { code: 'BAD_ARGS' });
+  }
+  const maxSwipes = Math.min(args.maxSwipes ?? 8, 20);
+  let swipes = 0;
+
+  const locate = (elements) => {
+    if (args.ref) {
+      const i = elements.findIndex((_, idx) => `r${idx}` === args.ref);
+      return i >= 0 ? { e: elements[i], i } : null;
+    }
+    if (args.testID != null) {
+      const i = elements.findIndex((e) => norm(e.props?.testID).includes(norm(args.testID)));
+      return i >= 0 ? { e: elements[i], i } : null;
+    }
+    // exact text first, then contains (same convention as tapText)
+    let i = elements.findIndex((e) => norm(textOf(e)) === norm(args.text));
+    if (i < 0 && args.contains != null) i = elements.findIndex((e) => norm(textOf(e)).includes(norm(args.contains)));
+    if (i < 0 && args.text != null) i = elements.findIndex((e) => norm(textOf(e)).includes(norm(args.text)) || norm(e.props?.accessibilityLabel).includes(norm(args.text)));
+    return i >= 0 ? { e: elements[i], i } : null;
+  };
+
+  for (let attempt = 0; attempt <= maxSwipes; attempt++) {
+    const elements = await fetchElements(phoneCall, true);
+    const hit = locate(elements);
+
+    if (hit && frameVisible(hit.e.frame)) {
+      return {
+        ok: true,
+        found: { ...projectElement(hit.e, hit.i), onScreen: true },
+        swipes,
+      };
+    }
+    if (attempt === maxSwipes) break;
+
+    // Swipe up from an element in the middle band (drives its scrollable ancestor)
+    const mid = elements.find((e) => {
+      const f = e.frame;
+      return frameVisible(f) && f.y > 300 && f.y < 1500 && f.height > 20;
+    }) || elements.find((e) => frameVisible(e.frame));
+    if (!mid) break;
+    await phoneCall('swipe', { viewTag: mid.viewTag, dx: 0, dy: -(args.swipeDistance ?? 500), durationMs: 300, steps: 8 });
+    swipes++;
+    await sleep(400);
+  }
+
+  // Not found OR never visible — say which
+  const elements = await fetchElements(phoneCall, true);
+  const hit = locate(elements);
+  throw Object.assign(
+    new Error(hit
+      ? `Element found but still off-screen after ${swipes} swipes (fiber-only element, frame=${JSON.stringify(hit.e.frame)})`
+      : `Element not found in tree after ${swipes} swipes: ${JSON.stringify({ text: args.text, contains: args.contains, testID: args.testID, ref: args.ref })}`),
+    { code: 'NOT_VISIBLE' },
+  );
+}
+
 module.exports = {
   inspect,
   snapshot,
@@ -444,5 +699,13 @@ module.exports = {
   assertText,
   assertEnabled,
   pinch,
+  visibleText,
+  tapText,
+  tapXY,
+  clickables,
+  fill,
+  waitGone,
+  find,
+  scrollIntoView,
   resetSession,
 };
