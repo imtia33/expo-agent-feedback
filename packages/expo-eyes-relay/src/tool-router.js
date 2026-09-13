@@ -256,17 +256,19 @@ async function type(phoneCall, args) {
 async function scrollTo(phoneCall, args) {
   const viewTag = await resolveRefToViewTag(phoneCall, args.ref);
 
-  let x = args.x ?? 0;
-  let y = args.y ?? 0;
+  // Relative scroll (direction + amount) → mode:'by' with dx/dy.
+  // The phone computes tracked offset + delta → absolute scrollTo.
+  // (The old behavior passed a DELTA as an absolute y — "scroll down 400"
+  // scrolled to offset 400 once and then never moved again.)
   if (args.direction && args.amount) {
-    switch (args.direction) {
-      case 'down': y = args.amount; break;
-      case 'up': y = -args.amount; break;
-      case 'right': x = args.amount; break;
-      case 'left': x = -args.amount; break;
-    }
+    const dx = { right: args.amount, left: -args.amount }[args.direction] ?? 0;
+    const dy = { down: args.amount, up: -args.amount }[args.direction] ?? 0;
+    const res = await phoneCall('scroll', { viewTag, dx, dy, mode: 'by', animated: args.animated ?? true });
+    return { ok: true, scrolledTo: res.scrolledTo };
   }
 
+  const x = args.x ?? 0;
+  const y = args.y ?? 0;
   const res = await phoneCall('scroll', { viewTag, x, y, animated: args.animated ?? true });
   return { ok: true, scrolledTo: res.scrolledTo };
 }

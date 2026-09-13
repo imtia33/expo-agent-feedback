@@ -372,13 +372,109 @@ export async function dispatchEvent(args: DispatchEventArgs): Promise<{ ok: bool
 
 // ─── scroll / scrollToIndex (by viewTag) ──────────────────────────────
 
+/**
+ * Last-known scroll offsets per scrollable viewTag. Android Fabric exposes
+ * NO 'scrollBy' native command — only absolute 'scrollTo' — so relative
+ * scrolls (mode:'by') are computed as (tracked offset + delta) → absolute
+ * scrollTo. Tracking is accurate as long as all scrolling goes through us;
+ * manual finger scrolling can make tracked offsets stale (swipe gesture
+ * synthesis is the fallback in that case).
+ */
+const scrollOffsetMap = new Map<number, { x: number; y: number }>();
+
+// Composite (JS) scrollable names AND Fabric/Paper string-typed host names.
+// Host fibers (tag 5) have `type` as a plain STRING (e.g. 'RCTScrollView'),
+// which `type.name`/`displayName` checks silently miss.
+const SCROLLABLE_NAMES = new Set([
+  'ScrollView', 'FlatList', 'SectionList', 'VirtualizedList', 'FlashList',
+  'RCTScrollView', 'AndroidScrollView', 'AndroidHorizontalScrollView',
+]);
+
+function findScrollableAncestorFiber(fiber: any): any | null {
+  let current: any = fiber;
+  let iterations = 0;
+  while (current && iterations < 60) {
+    if (SCROLLABLE_NAMES.has(getTypeName(current))) return current;
+    current = current.return;
+    iterations++;
+  }
+  return null;
+}
+
+/**
+ * Resolve a scrollable fiber to (hostFiber, hostInstance, classInstance).
+ *
+ * The native scrollable host is a DESCENDANT of composite wrappers
+ * (FlatList → VirtualizedList → ScrollView → RCTScrollView), so we walk
+ * DOWN for the first tag-5 host fiber. (getHostInstanceForFiber walks UP
+ * the parent chain, which returns an unrelated wrapper view for composites
+ * — dispatching scrollTo on it silently fails.)
+ *
+ * classInstance: RN's JS ScrollView is a class component whose fiber
+ * (tag 1) carries the instance with .scrollTo in stateNode. We walk UP from
+ * the host fiber to find it — works on both Paper and Fabric (Animated
+ * wrappers in between don't have .scrollTo, so they're skipped).
+ */
+function findScrollableHostInfo(scrollableFiber: any): {
+  hostFiber: any;
+  hostInstance: any;
+  classInstance: any;
+} {
+  let hostFiber: any = null;
+  if (scrollableFiber.tag === 5 && scrollableFiber.stateNode) {
+    hostFiber = scrollableFiber;
+  } else {
+    // BFS down: first (shallowest) host fiber = the native scrollable itself
+    const queue: any[] = [scrollableFiber.child];
+    let guard = 0;
+    while (queue.length && guard < 300) {
+      guard++;
+      const node = queue.shift();
+      if (!node) continue;
+      if (node.tag === 5 && node.stateNode) { hostFiber = node; break; }
+      queue.push(node.child, node.sibling);
+    }
+  }
+
+  let classInstance: any = null;
+  if (scrollableFiber.tag === 1 && typeof scrollableFiber.stateNode?.scrollTo === 'function') {
+    classInstance = scrollableFiber.stateNode;
+  }
+  if (!classInstance) {
+    let cur: any = (hostFiber ?? scrollableFiber).return;
+    let hops = 0;
+    while (cur && hops < 25) {
+      if (cur.tag === 1 && cur.stateNode && typeof cur.stateNode.scrollTo === 'function') {
+        classInstance = cur.stateNode;
+        break;
+      }
+      cur = cur.return;
+      hops++;
+    }
+  }
+
+  return { hostFiber, hostInstance: hostFiber?.stateNode ?? null, classInstance };
+}
+
+function clampOffset(v: number): number {
+  return Number.isFinite(v) ? Math.max(0, v) : 0;
+}
+
 export async function scroll(args: {
   viewTag: number;
+  /** Absolute target X (mode 'to', default) */
   x?: number;
+  /** Absolute target Y (mode 'to', default) */
   y?: number;
+  /** Delta X (mode 'by') */
+  dx?: number;
+  /** Delta Y (mode 'by') */
+  dy?: number;
+  /** 'to' = absolute (default), 'by' = relative to last tracked offset */
+  mode?: 'to' | 'by';
   animated?: boolean;
 }): Promise<{ ok: boolean; scrolledTo: { x: number; y: number } }> {
-  const { viewTag, x = 0, y = 0, animated = true } = args;
+  const { viewTag, animated = true } = args;
   if (typeof viewTag !== 'number') throw Object.assign(new Error('viewTag is required'), { code: 'BAD_ARGS' });
 
   const fiber = await findFiberByViewTag(viewTag);
@@ -386,56 +482,70 @@ export async function scroll(args: {
     throw Object.assign(new Error(`viewTag ${viewTag} not found`), { code: 'VIEW_NOT_FOUND' });
   }
 
-  const SCROLLABLE_TYPES = new Set(['ScrollView', 'FlatList', 'SectionList', 'VirtualizedList', 'FlashList', 'RCTScrollView']);
-  let current: any = fiber;
-  let scrollableFiber: any = null;
-  while (current) {
-    const typeName = current?.elementType?.displayName || current?.type?.displayName || current?.type?.name;
-    if (typeName && SCROLLABLE_TYPES.has(typeName)) {
-      scrollableFiber = current;
-      break;
-    }
-    current = current.return;
-  }
+  const scrollableFiber = findScrollableAncestorFiber(fiber);
   if (!scrollableFiber) {
     throw Object.assign(new Error(`No scrollable ancestor for viewTag ${viewTag}`), { code: 'NOT_SCROLLABLE' });
   }
 
-  const hostInstance = getHostInstanceForFiber(scrollableFiber);
+  // Compute ABSOLUTE target offset (relative scrolls rely on tracked offsets)
+  const last = scrollOffsetMap.get(viewTag) ?? { x: 0, y: 0 };
+  let targetX: number;
+  let targetY: number;
+  if (args.mode === 'by' || args.dx !== undefined || args.dy !== undefined) {
+    targetX = clampOffset(last.x + (args.dx ?? 0));
+    targetY = clampOffset(last.y + (args.dy ?? 0));
+  } else {
+    targetX = clampOffset(args.x ?? 0);
+    targetY = clampOffset(args.y ?? 0);
+  }
+
+  const { hostInstance, classInstance } = findScrollableHostInfo(scrollableFiber);
   if (!hostInstance) {
     throw Object.assign(new Error(`No host instance for scrollable`), { code: 'NO_HOST' });
   }
 
-  if (typeof hostInstance.scrollTo === 'function') {
+  const record = () => scrollOffsetMap.set(viewTag, { x: targetX, y: targetY });
+
+  // 1) RN's real ScrollView class instance — works on Paper AND Fabric
+  if (classInstance && typeof classInstance.scrollTo === 'function') {
     try {
-      hostInstance.scrollTo({ x, y, animated });
-      return { ok: true, scrolledTo: { x, y } };
-    } catch (e: any) {
-      throw Object.assign(new Error(`scrollTo failed: ${e.message}`), { code: 'SCROLL_FAILED' });
-    }
+      classInstance.scrollTo({ x: targetX, y: targetY, animated });
+      record();
+      return { ok: true, scrolledTo: { x: targetX, y: targetY } };
+    } catch {}
   }
 
+  // 2) Legacy scroll responder (Paper)
   if (typeof hostInstance.getScrollResponder === 'function') {
     try {
       const responder = hostInstance.getScrollResponder();
       if (responder && typeof responder.scrollTo === 'function') {
-        responder.scrollTo({ x, y, animated });
-        return { ok: true, scrolledTo: { x, y } };
+        responder.scrollTo({ x: targetX, y: targetY, animated });
+        record();
+        return { ok: true, scrolledTo: { x: targetX, y: targetY } };
       }
     } catch {}
   }
 
-  // Fabric fallback: dispatch the 'scrollTo' view manager command directly.
-  // On Fabric (new architecture), the host instance doesn't expose scrollTo,
-  // but UIManager.dispatchViewManagerCommand can dispatch it to the native
-  // ScrollView/FlatList. The command name is 'scrollTo', args are [x, y, animated].
+  // 3) Fabric: RN's public dispatchCommand API
+  try {
+    const rn: any = require('react-native');
+    if (typeof rn.dispatchCommand === 'function') {
+      rn.dispatchCommand(hostInstance, 'scrollTo', [targetX, targetY, animated]);
+      record();
+      return { ok: true, scrolledTo: { x: targetX, y: targetY } };
+    }
+  } catch {}
+
+  // 4) Legacy UIManager dispatch (Paper fallback)
   try {
     const nativeTag = (hostInstance as any)._nativeTag ||
                       (hostInstance as any).__nativeTag ||
                       (hostInstance as any).canonical?.nativeTag;
     if (nativeTag !== undefined && typeof (UIManager as any).dispatchViewManagerCommand === 'function') {
-      (UIManager as any).dispatchViewManagerCommand(nativeTag, 'scrollTo', [x, y, animated]);
-      return { ok: true, scrolledTo: { x, y } };
+      (UIManager as any).dispatchViewManagerCommand(nativeTag, 'scrollTo', [targetX, targetY, animated]);
+      record();
+      return { ok: true, scrolledTo: { x: targetX, y: targetY } };
     }
   } catch (e: any) {
     // last resort failed
