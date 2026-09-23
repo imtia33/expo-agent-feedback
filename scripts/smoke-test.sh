@@ -8,7 +8,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HTTP_PORT=18765
 WS_PORT=18766
 TOKEN="test-token-123"
-BASE="http://localhost:${HTTP_PORT}"
+BASE="http://127.0.0.1:${HTTP_PORT}"
+# NOTE: 127.0.0.1, not localhost — on IPv6-first runners `localhost` resolves
+# to ::1 and Node's ws/http will not fall back to IPv4 (ECONNREFUSED ::1).
 LOG_DIR="/tmp/expo-eyes-smoke"
 mkdir -p "$LOG_DIR"
 
@@ -37,7 +39,7 @@ echo "── 1. Boot relay (HTTP :$HTTP_PORT, WS :$WS_PORT, token auth)"
 RELAY_PID=$!
 
 echo "── 2. Connect mock phone"
-(cd "$ROOT/scripts" && exec env EXPO_EYES_WS_URL="ws://localhost:$WS_PORT" EXPO_EYES_TOKEN="$TOKEN" \
+(cd "$ROOT/scripts" && exec env EXPO_EYES_WS_URL="ws://127.0.0.1:$WS_PORT" EXPO_EYES_TOKEN="$TOKEN" \
   node mock-phone.js) >"$LOG_DIR/phone.log" 2>&1 &
 PHONE_PID=$!
 
