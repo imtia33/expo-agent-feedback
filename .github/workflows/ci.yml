@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install (npm workspaces, single root lockfile)
+        run: npm ci
+
+      - name: Build TS packages (expo-eyes-app, expo-eyes-agent)
+        run: npm run build
+
+      - name: Publish hygiene — tarballs stay lean and dist-only
+        run: |
+          for p in expo-eyes-agent expo-eyes-relay expo-eyes-app; do
+            npm pack --dry-run -w "$p"
+          done
+
+      - name: Full-chain smoke test (relay + mock phone + CLI + MCP)
+        run: ./scripts/smoke-test.sh
+
+      - name: Upload smoke logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-node-${{ matrix.node }}
+          path: /tmp/expo-eyes-smoke/
+          if-no-files-found: ignore
