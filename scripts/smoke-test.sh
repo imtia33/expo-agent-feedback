@@ -45,29 +45,29 @@ PHONE_PID=$!
 READY=1
 for i in $(seq 1 30); do
   PING=$(curl -s "$BASE/ping" 2>/dev/null)
-  echo "$PING" | rg -q '"phoneReplied":true' && READY=0 && break
+  echo "$PING" | grep -Eq '"phoneReplied":true' && READY=0 && break
   sleep 0.5
 done
 check "end-to-end /ping (relay → WS → phone → back)" $READY
 [ $READY -ne 0 ] && { echo "relay.log:"; tail -20 "$LOG_DIR/relay.log"; echo "phone.log:"; tail -10 "$LOG_DIR/phone.log"; exit 1; }
 
 echo "── 3. Relay HTTP API"
-curl -s "$BASE/health" | rg -q '"phoneConnected":true'; check "GET /health shows connected phone" $?
-curl -s "$BASE/tools" -H "Authorization: Bearer $TOKEN" | rg -q '"scrollIntoView"'; check "GET /tools lists composite tools" $?
-curl -s -X POST "$BASE/tool/visibleText" -H "Authorization: Bearer $TOKEN" | rg -q '"Sign in"'; check "POST /tool/visibleText sees mock screen" $?
-curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/tool/inspect" | rg -q 401; check "auth enforced without token (401)" $?
+curl -s "$BASE/health" | grep -Eq '"phoneConnected":true'; check "GET /health shows connected phone" $?
+curl -s "$BASE/tools" -H "Authorization: Bearer $TOKEN" | grep -Eq '"scrollIntoView"'; check "GET /tools lists composite tools" $?
+curl -s -X POST "$BASE/tool/visibleText" -H "Authorization: Bearer $TOKEN" | grep -Eq '"Sign in"'; check "POST /tool/visibleText sees mock screen" $?
+curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/tool/inspect" | grep -Eq 401; check "auth enforced without token (401)" $?
 
 echo "── 4. Agent CLI (typed client + zod validation)"
 CLI="node $ROOT/packages/expo-eyes-agent/dist/cli.js"
 export EXPO_EYES_RELAY_URL="$BASE" EXPO_EYES_TOKEN="$TOKEN"
-$CLI health | rg -q '"phoneConnected": ?true'; check "cli health" $?
-$CLI tools | rg -q '"name": ?"find"'; check "cli tools (live from relay)" $?
-$CLI visibleText | rg -q '"Sign in"'; check "cli visibleText" $?
-$CLI find --testID sign-in | rg -q '"viewTag": ?4'; check "cli find --testID" $?
-$CLI fill --text "hi@example.com" --placeholder example | rg -q '"ok": ?true'; check "cli fill (input by placeholder)" $?
+$CLI health | grep -Eq '"phoneConnected": ?true'; check "cli health" $?
+$CLI tools | grep -Eq '"name": ?"find"'; check "cli tools (live from relay)" $?
+$CLI visibleText | grep -Eq '"Sign in"'; check "cli visibleText" $?
+$CLI find --testID sign-in | grep -Eq '"viewTag": ?4'; check "cli find --testID" $?
+$CLI fill --text "hi@example.com" --placeholder example | grep -Eq '"ok": ?true'; check "cli fill (input by placeholder)" $?
 TAP=$($CLI tapText --text "Sign in" 2>&1)
-echo "$TAP" | rg -q '"screenChanged": ?true'; check "cli tapText verified (screen changed)" $?
-echo "$TAP" | rg -q 'Signed in'; check "tap actually toggled the mock button" $?
+echo "$TAP" | grep -Eq '"screenChanged": ?true'; check "cli tapText verified (screen changed)" $?
+echo "$TAP" | grep -Eq 'Signed in'; check "tap actually toggled the mock button" $?
 $CLI tapText --text "Nonexistent Button" >/dev/null 2>&1; [ $? -ne 0 ]; check "tapText on missing element fails cleanly" $?
 $CLI tapText --text "Sign in" --verify notabool 2>/dev/null >/dev/null; [ $? -ne 0 ]; check "bad args rejected by validation" $?
 
@@ -78,8 +78,8 @@ LIST='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 printf '%s\n%s\n' "$INIT" "$LIST" | $CLI mcp >"$LOG_DIR/mcp.log" 2>&1 &
 MCP_PID=$!
 sleep 2; kill $MCP_PID 2>/dev/null
-rg -q '"name":"expo-eyes"' "$LOG_DIR/mcp.log"; check "mcp initialize handshake" $?
-TOOLCOUNT=$(rg -o '"name": ?"' "$LOG_DIR/mcp.log" | wc -l)
+grep -Eq '"name":"expo-eyes"' "$LOG_DIR/mcp.log"; check "mcp initialize handshake" $?
+TOOLCOUNT=$(grep -oE '"name": ?"' "$LOG_DIR/mcp.log" | wc -l)
 [ "$TOOLCOUNT" -ge 26 ]; check "mcp tools/list exposes >=26 tools (got $TOOLCOUNT)" $?
 
 echo ""
