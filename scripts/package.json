@@ -1,1 +1,12 @@
-{"name":"expo-eyes-scripts","version":"0.0.0","private":true,"dependencies":{"ws":"^8.21.3"}}
+{
+  "name": "expo-eyes-scripts",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "description": "Dev scripts for the expo-eyes monorepo — mock phone for testing the chain without a real device",
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "scripts": {
+    "start": "node mock-phone.js"
+  }
+}

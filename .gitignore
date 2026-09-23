@@ -1,9 +1,18 @@
 # Dependencies
 node_modules/
+
+# Expo
 .expo/
+web-build/
+
+# Build artifacts (built at publish time via prepublishOnly)
 dist/
 build/
+*.tsbuildinfo
+
+# Logs
 *.log
+npm-debug.log*
 
 # OS
 .DS_Store
@@ -14,28 +23,22 @@ Thumbs.db
 .idea/
 *.swp
 
-# Env / secrets
+# Env / secrets — never commit
 .env
 .env.local
+.env.*.local
 *.pem
 *.key
 token.txt
 
-# Build artifacts
-*.tsbuildinfo
-
-# Test outputs
+# Test / coverage outputs
 coverage/
 .nyc_output/
-
-# Tool results (ephemeral)
 tool-results/
 
-# Internal stuff (not part of project)
+# Local workspace clutter
 upload/
 skills/
 research/
 worklog.md
-
-# Allow dist for the agent package (we ship it)
-!packages/expo-eyes-agent/dist/
+*.tgz

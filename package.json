@@ -1,0 +1,36 @@
+{
+  "name": "expo-eyes",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "description": "Agent eyes & fingers for Expo apps — monorepo for expo-eyes-app (in-app SDK), expo-eyes-relay (bridge server), and expo-eyes-agent (SDK + MCP + CLI)",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "examples/*",
+    "scripts"
+  ],
+  "scripts": {
+    "build": "npm run build --if-present --workspaces",
+    "relay": "npm run start -w expo-eyes-relay",
+    "demo": "npm run start -w expo-eyes-demo",
+    "mock-phone": "npm run start -w expo-eyes-scripts",
+    "typecheck": "npm run build --workspace expo-eyes-agent --workspace expo-eyes-app"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imtia33/expo-agent-feedback.git"
+  },
+  "keywords": [
+    "expo",
+    "react-native",
+    "ai-agent",
+    "mcp",
+    "testing",
+    "automation",
+    "e2e"
+  ],
+  "author": "imtia33 <axistro.freefire@gmail.com>"
+}
