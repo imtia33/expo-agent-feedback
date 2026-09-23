@@ -9,132 +9,145 @@
 │ Phone (Expo app)                                                    │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │ expo-eyes-app  ← THIN CLIENT                                │   │
-│  │   5 primitives:                                             │   │
-│  │     getTree          → raw fiber tree (no refs/stableIds)   │   │
-│  │     dispatchEvent    → fire onPress/onChangeText/etc.       │   │
-│  │     readLayout       → x/y/width/height for one fiber      │   │
-│  │     scroll           → scrollTo on a scrollable fiber      │   │
-│  │     scrollToIndex    → scrollToIndex on a list fiber       │   │
+│  │   18 primitives (over WS, JSON):                            │   │
+│  │     listVisibleElements  → flat list w/ frames + props      │   │
+│  │     inspectAtPoint       → element at (x, y)                │   │
+│  │     dispatchEvent        → fire onPress/onChangeText/etc.   │   │
+│  │     scroll / scrollToIndex / swipe / pinch                  │   │
+│  │     screenshot / readScreen / layout / waitForElement       │   │
+│  │     navigate / back / assert* / ping / diagnostics          │   │
 │  │   NO computation, NO pruning, NO ref allocation             │   │
 │  └──────────────┬───────────────────────────────────────────────┘   │
 └─────────────────┼───────────────────────────────────────────────────┘
-                  │ WS (LAN, phone → relay)
+                  │ WS (phone dials OUT — LAN, or via reverse proxy)
                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Laptop — expo-eyes-relay  ← THE BRAINS                             │
+│ Relay — expo-eyes-relay  ← THE BRAINS (Node)                        │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │ tool-router.js — implements 7 agent-facing tools:           │   │
-│  │   inspect, snapshot, tap, longPress,                        │   │
-│  │   type, scrollTo, expandList                                │   │
+│  │ tool-router.js — composes 26 agent-facing tools:            │   │
+│  │   eyes:      inspect, snapshot, visibleText, readScreen,    │   │
+│  │              find, clickables, layout, screenshot           │   │
+│  │   fingers:   tap, tapText, tapXY, longPress, type, fill,    │   │
+│  │              scrollTo, scrollIntoView, swipe, pinch,        │   │
+│  │              navigate, back                                  │   │
+│  │   waiting:   waitFor, waitGone, assertVisible/Text/Enabled, │   │
+│  │              expandList                                      │   │
 │  │                                                              │   │
 │  │ All computation lives here:                                 │   │
-│  │   - ref allocation (r0, r1, ...)                            │   │
-│  │   - stableId hashing (tid:xxx, h:xxxxxx)                    │   │
-│  │   - tree pruning (cap depth, skip wrappers)                 │   │
-│  │   - snapshot drill-in                                        │   │
-│  │   - tap resolution (find pressable ancestor)                │   │
-│  │   - scrollable ancestor search                              │   │
-│  │   - virtualization detection                                │   │
-│  │   - tree caching (1s TTL)                                   │   │
-│  │   - ref → fid resolution                                    │   │
+│  │   - ref allocation (r0, r1, …) + ref→viewTag resolution     │   │
+│  │   - element cache (2s TTL, per-session)                     │   │
+│  │   - composite tools (tapText: find → ancestor climb →       │   │
+│  │     press → screen-fingerprint verify)                      │   │
+│  │   - scrollable-ancestor search, delta scrolling             │   │
+│  │   - virtualization handling, overflow audits                │   │
+│  │                                                              │   │
+│  │ session-manager.js — multi-phone: sessions keyed by         │   │
+│  │   platform + deviceId, native-over-web preference,          │   │
+│  │   pending-call correlation, /ping full-chain probe          │   │
+│  │ ws-server.js — hello/token handshake, heartbeat 30s/10s     │   │
+│  │ http-server.js — Express 5 API, bearer auth, CORS           │   │
 │  └──────────────┬───────────────────────────────────────────────┘   │
 └─────────────────┼───────────────────────────────────────────────────┘
-                  │ HTTP / HTTPS (LAN or via --tunnel)
+                  │ HTTP / HTTPS (LAN, tunnel, or public host)
                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Agent (Claude / Cursor / curl / CLI)                                │
+│ Agent (Claude / Cursor / Claude Desktop / CLI / curl)               │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │ expo-eyes-agent — typed SDK + MCP server + CLI              │   │
-│  │   Talks to relay via HTTP. Doesn't know about primitives.   │   │
+│  │   Zod-validated args, retry on 503, 30s timeouts.           │   │
+│  │   Talks HTTP to the relay. Knows nothing about fibers.      │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Why this split (the moat)
+## Why this split (engineering, not aesthetics)
 
 **If the brains lived in the app SDK:**
-- Anyone can read the open-source app SDK + agent SDK
-- They'd see all the tree-walking, ref allocation, stableId hashing
-- A weekend of work to replicate the relay with a basic Express server
-- We'd have no defensible IP
+- Every app embedding the SDK would ship all the tree-walking, ref
+  allocation, and composite-tool logic into the bundle.
+- Adding or fixing anything would require every consuming app to upgrade and
+  reload the SDK.
+- The SDK would grow past what you want injected into someone else's app.
 
-**With brains in the relay:**
-- The app SDK is useless alone — it just sends raw fibers
-- The agent SDK is useless alone — it just calls HTTP endpoints
-- Only the relay knows how to turn raw fibers into agent-friendly trees
-- Replicating the relay requires reading our closed-source `tool-router.js` and reimplementing it
-- We can iterate on the relay's intelligence (better pruning, smarter stableIds, snapshot diffs) without touching the app SDK or breaking any installed app
+**With the brains in the relay:**
+- The app SDK is a thin, auditable client — 18 primitives, a WS client, a
+  DevTools-hook attachment. Easy to trust, easy to no-op in production.
+- The relay's intelligence (smarter composites, better caching, new tools)
+  improves **without touching any installed app** — upgrade the relay, the
+  phone keeps working.
+- The agent SDK is a plain typed HTTP client; it works with any relay, and
+  the relay works with any HTTP client.
 
-## What's in each package
+## How elements become refs
 
-### expo-eyes-app (phone, pure JS, ~12KB)
-- `EyesProvider` React component
-- `ws-client` — auto-reconnect WS
-- `devtools-hook` — attaches to `__REACT_DEVTOOLS_GLOBAL_HOOK__`
-- `raw-tree` — walks fibers, reads layouts (parallel)
-- `primitives` — 5 functions exposed over WS
+1. The relay asks the phone for `listVisibleElements` — a flat array of
+   `{ viewTag, name, frame, hierarchy, props }` produced by RN's own
+   inspector API (`getInspectorDataForViewAtPoint`) and fiber walking.
+2. The relay caches this list per session (2 s TTL) and assigns positional
+   refs: `r0`, `r1`, … Each element also carries a stable `tid:<testID>` when
+   the developer set a testID.
+3. A tool arg `ref` resolves to a `viewTag`: `r5` → index 5, `tid:save` →
+   testID match, otherwise a name substring match. If the screen changed, the
+   cache is invalidated and the element list re-scanned.
 
-That's it. ~600 lines of code total. Nothing here is "secret sauce".
+## The agent's view (26 tools)
 
-### expo-eyes-relay (laptop, Node, ~15KB)
-- `http-server` — Express 5, exposes /tool/:name to agents
-- `ws-server` — accepts phone WS connections
-- `session-manager` — tracks phone state, multiplexes tool calls
-- `tool-router` — **THE BRAINS** (ref allocation, stableId, pruning, snapshot, tap resolution, virtualization, tree caching, ref→fid resolution)
-- `tunnel` — spawns cloudflared/ngrok/localtunnel for remote agents
-- `config` — env-var + CLI flag parsing
+| Group | Tools |
+|---|---|
+| Eyes | `inspect`, `snapshot`, `visibleText`, `readScreen`, `find`, `clickables`, `layout`, `screenshot` |
+| Fingers | `tap`, `tapText`, `tapXY`, `longPress`, `type`, `fill`, `scrollTo`, `scrollIntoView`, `swipe`, `pinch`, `navigate`, `back` |
+| Waiting & assertions | `waitFor`, `waitGone`, `assertVisible`, `assertText`, `assertEnabled`, `expandList` |
 
-~1200 lines total. The tool-router alone is ~400 lines of the smart stuff.
+Composite tools "fail softly": when `tapText` finds no match it returns
+`{ ok: false, error }` rather than an HTTP error, so agent loops can branch
+on a normal payload. The CLI maps `ok:false` to exit code 1.
 
-### expo-eyes-agent (anywhere, ~30KB)
-- `client` — typed HTTP client with retry + zod validation
-- `eyes` — high-level API (inspect, tap, type, etc.)
-- `mcp-server` — exposes tools to LLM clients via MCP
-- `cli` — `npx expo-eyes-agent <tool>`
-- `schemas` — zod schemas (single source of truth for tool args/results)
+`GET /tools` returns live descriptions and arg docs for all of them — the
+same list the MCP server exposes and the CLI understands.
 
-~800 lines total. Useful without a relay, but only as a typed HTTP client — it doesn't know anything about React or fibers.
+## The phone's view (18 primitives)
 
-## The agent's view
-
-The agent (or any HTTP client) sees 7 tools:
-
-| Tool | Args | Returns |
-|---|---|---|
-| `inspect` | — | pruned tree with `ref` + `stableId` per node |
-| `snapshot` | `ref` | deep subtree of one element |
-| `tap` | `ref` | ok |
-| `longPress` | `ref`, `durationMs?` | ok |
-| `type` | `ref`, `text`, `append?` | ok, newValue |
-| `scrollTo` | `ref`, `x?`, `y?`, `direction?`, `amount?` | ok, scrolledTo |
-| `expandList` | `listRef`, `from?`, `to?` | items, renderedRange, itemCount |
-
-Refs can be:
-- `r5` — positional (fast, but invalidates on re-render)
-- `tid:saveBtn` — testID-based (stable, set by dev)
-- `h:7a3b2` — structural hash (stable, computed by relay)
-
-## The phone's view
-
-The phone sees only 5 primitives. It has no concept of refs, stableIds, or pruning. It just sends raw fibers and dispatches events.
-
-This means:
-- **The app SDK never needs updating** when we add new agent-facing tools
-- **The app SDK is tiny** — ~12KB tarball
-- **The app SDK works in Expo Go** — no native modules
-- **Adding features (like `scrollPosition` or `visibleNodes`)** only requires changes to the relay
+The phone knows nothing about refs, frames verification, or composite
+behavior. It dispatches events, reads layouts, and answers probes. That is
+what keeps the SDK Expo-Go-compatible (pure JS over the DevTools hook) and
+production-safe (the provider is a no-op when `__DEV__` is false).
 
 ## Connection topology
 
 ```
-Phone ←──── WS (LAN) ────→ Relay ←──── HTTP/HTTPS ────→ Agent
-        phone connects OUT       agent calls in
-        to relay                  (or via --tunnel for remote)
+Phone ──WS dials OUT──▶ Relay ◀──HTTP/HTTPS── Agent
+        (LAN, or wss://        (LAN, or --tunnel,
+         reverse proxy)         or public host)
 ```
 
-- Phone → Relay: WS on LAN (or future: tunnel for remote phones)
-- Agent → Relay: HTTP, optionally via cloudflared tunnel for cross-region
+- **Phone → relay** is always an *outbound* WS connection from the phone.
+  This is what makes NAT, tunnels, and reverse proxies work: the relay never
+  needs to reach the phone.
+- **Agent → relay** is HTTP with `Authorization: Bearer <token>` (exempt:
+  `/`, `/health`, `/status`, `/ping`, `/diagnostics`).
+- **`--tunnel`** spawns cloudflared (or ngrok/localtunnel) to publish the
+  HTTP port. The relay *refuses to start* a tunnel without a token — a
+  public, unauthenticated phone controller would be a remote-access Trojan.
+- **Multi-phone**: sessions are keyed `platform:deviceId`; reconnects replace
+  their own session, tool calls default to the newest native phone, and
+  `?session=<id>` targets a specific one.
+- **Liveness**: `GET /ping` measures the full round trip (relay → WS → phone
+  primitive → back) and returns actionable hints when a link is broken.
 
-The `--app-url exp://192.168.1.5:8081` flag is metadata — the relay stores it and exposes it in `/health` so the agent knows which app it's driving. It doesn't affect the actual connection (which is still phone → relay WS).
+## Message flow
 
-In the future, when we want relay → phone direct connection (e.g. for relay-less mode), we'll use `react-native-nitro-http-server` (dev build only — see `docs/libraries/rn-http-server-summary.md`).
+```
+Agent                    Relay                     Phone
+  │ POST /tool/tapText     │                          │
+  │───────────────────────▶│ listVisibleElements      │
+  │                        │─────────────────────────▶│
+  │                        │       elements[]         │
+  │                        │◀──────────────────────── │
+  │                        │ dispatchEvent(press)     │
+  │                        │─────────────────────────▶│  onPress fires,
+  │                        │ listVisibleElements      │  screen changes
+  │                        │─────────────────────────▶│
+  │        result          │       fingerprint ≠      │
+  │◀───────────────────────│◀──────────────────────── │
+  │  { ok, screenChanged } │                          │
+```
