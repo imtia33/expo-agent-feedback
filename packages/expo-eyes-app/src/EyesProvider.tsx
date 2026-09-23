@@ -12,15 +12,14 @@
  *     );
  *   }
  *
- * The provider is a THIN CLIENT. It exposes only 3 primitives to the relay:
- *   - getTree:           raw fiber tree (no refs, no stableIds, no pruning)
- *   - dispatchEvent:     fire onPress/onChangeText/etc. on a fiber
- *   - readLayout:        x/y/width/height for a fiber
+ * The provider is a THIN CLIENT. It exposes only low-level primitives to the
+ * relay (18 — see PRIMITIVES below and ./protocol.ts):
+ *   - listVisibleElements: flat list of visible elements (frames, props)
+ *   - dispatchEvent:       fire onPress/onChangeText/etc. on a viewTag
+ *   - scroll / scrollToIndex, swipe, pinch, and more
  *
  * All higher-level logic (refs, stableIds, snapshot, tap resolution, scroll
- * ancestor search) lives in the relay.
- *
- * In production builds, the provider is a no-op.
+ * ancestor search, composite tools) lives in the relay.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -158,9 +157,8 @@ export function EyesProvider({ relayUrl, token, children, showStatus = __DEV__ }
     client.onClose = () => setStatus('disconnected');
 
     // Capture JS runtime errors + unhandled rejections and forward to the relay.
-    // This makes Expo CLI console errors visible in /tmp/relay.log (via the
-    // event stream) so the agent can debug crashes without reading the Expo
-    // terminal directly.
+    // This makes app-side crashes visible in the relay's event stream so the
+    // agent can debug them without reading the Expo terminal directly.
     const errorHandler = (event: any) => {
       const error = event?.error || event?.reason || event;
       const msg = error?.message || String(error);

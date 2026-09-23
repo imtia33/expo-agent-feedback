@@ -5,14 +5,19 @@
  * shapes and are used to:
  *   - validate tool args coming from the agent (CLI / MCP / SDK)
  *   - validate tool results coming back from the relay
- *   - generate JSON schemas for the MCP server (via zod-to-json-schema
- *     internally in @modelcontextprotocol/sdk)
+ *   - generate JSON schemas for the MCP server (via the MCP SDK)
  *
- * Verified against zod 4.6.1 (see docs/libraries/zod-API-summary.md).
+ * Design rules:
+ *   - ARGS schemas are STRICT — catch agent mistakes before the network hop.
+ *   - RESULT schemas for the 7 foundational tools are strict (stable shapes).
+ *   - RESULT schemas for composite tools (visibleText, tapText, fill, …) are
+ *     LOOSE (z.looseObject) — their payloads evolve with the relay; strict
+ *     validation there would only produce false-positive MALFORMED_RESULT.
+ *
+ * Verified against zod 4.6.x.
  * Key v4 specifics:
  *   - z.enum(['a','b']) takes a string array (not a z.nativeEnum)
- *   - .optional() for optional fields
- *   - .default() short-circuits (used carefully)
+ *   - z.looseObject({}) == v3's z.object({}).passthrough()
  *   - safeParse returns { success, data } | { success, error }
  */
 
@@ -77,6 +82,9 @@ export const TreeNodeSchema: z.ZodType<TreeNodeRaw> = z.lazy(() =>
   }),
 );
 
+/** Loose result — anything goes, `ok` if present must be boolean. */
+export const LooseResultSchema = z.looseObject({ ok: z.boolean().optional() });
+
 // ─── Tool arg schemas ─────────────────────────────────────────────────
 
 export const InspectArgsSchema = z.object({
@@ -117,6 +125,117 @@ export const ExpandListArgsSchema = z.object({
   listRef: z.string().min(1, 'listRef is required'),
   from: z.number().int().min(0).default(0),
   to: z.number().int().min(0).optional(),
+});
+
+export const SwipeArgsSchema = z.object({
+  ref: z.string().min(1, 'ref is required'),
+  dx: z.number().default(0),
+  dy: z.number().default(0),
+  durationMs: z.number().int().positive().default(250),
+  steps: z.number().int().positive().default(10),
+});
+
+export const ScreenshotArgsSchema = z.object({
+  ref: z.string().optional(),
+});
+
+export const WaitForArgsSchema = z.object({
+  testID: z.string().optional(),
+  text: z.string().optional(),
+  timeoutMs: z.number().int().positive().default(5000),
+  intervalMs: z.number().int().positive().optional(),
+});
+
+export const ReadScreenArgsSchema = z.object({});
+
+export const LayoutArgsSchema = z.object({
+  ref: z.string().optional(),
+  testID: z.string().optional(),
+});
+
+export const NavigateArgsSchema = z.object({
+  route: z.string().min(1, 'route is required (e.g. "/playground")'),
+  params: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const BackArgsSchema = z.object({});
+
+export const AssertVisibleArgsSchema = z.object({
+  testID: z.string().optional(),
+  text: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const AssertTextArgsSchema = z.object({
+  testID: z.string().min(1, 'testID is required'),
+  text: z.string().min(1, 'text is required'),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const AssertEnabledArgsSchema = z.object({
+  testID: z.string().min(1, 'testID is required'),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const PinchDirectionSchema = z.enum(['in', 'out']);
+
+export const PinchArgsSchema = z.object({
+  ref: z.string().min(1, 'ref is required'),
+  direction: PinchDirectionSchema.optional(),
+  scale: z.number().positive().default(2.0),
+  durationMs: z.number().int().positive().default(300),
+  steps: z.number().int().positive().default(10),
+});
+
+export const VisibleTextArgsSchema = z.object({});
+
+export const TapTextArgsSchema = z.object({
+  text: z.string().optional(),
+  contains: z.string().optional(),
+  index: z.number().int().min(0).default(0),
+  role: z.string().optional(),
+  verify: z.boolean().default(true),
+});
+
+export const TapXYArgsSchema = z.object({
+  x: z.number('x is required (screen point)'),
+  y: z.number('y is required (screen point)'),
+  verify: z.boolean().default(true),
+});
+
+export const ClickablesArgsSchema = z.object({});
+
+export const FillArgsSchema = z.object({
+  text: z.string().min(1, 'text is required (the new value to set)'),
+  placeholder: z.string().optional(),
+  contains: z.string().optional(),
+  value: z.string().optional(),
+  index: z.number().int().min(0).default(0),
+});
+
+export const WaitGoneArgsSchema = z.object({
+  text: z.string().optional(),
+  contains: z.string().optional(),
+  timeoutMs: z.number().int().positive().default(5000),
+});
+
+export const FindArgsSchema = z.object({
+  text: z.string().optional(),
+  testID: z.string().optional(),
+  name: z.string().optional(),
+  role: z.string().optional(),
+  pressable: z.boolean().default(false),
+  refresh: z.boolean().default(false),
+  limit: z.number().int().min(1).max(50).default(10),
+});
+
+export const ScrollIntoViewArgsSchema = z.object({
+  text: z.string().optional(),
+  contains: z.string().optional(),
+  testID: z.string().optional(),
+  ref: z.string().optional(),
+  maxSwipes: z.number().int().min(1).max(20).default(8),
+  swipeDistance: z.number().default(500),
 });
 
 // ─── Tool result schemas ──────────────────────────────────────────────
@@ -171,6 +290,10 @@ export interface ToolSpec {
   resultSchema: z.ZodType<any>;
 }
 
+/**
+ * All 26 agent-facing tools — mirrors the relay's VALID_TOOLS exactly.
+ * Descriptions match the relay's /tools endpoint.
+ */
 export const TOOLS: Record<string, ToolSpec> = {
   inspect: {
     description: 'Return the visible React Native tree as JSON (pruned, agent-friendly). Use this first to discover refs.',
@@ -178,7 +301,7 @@ export const TOOLS: Record<string, ToolSpec> = {
     resultSchema: InspectResultSchema,
   },
   snapshot: {
-    description: 'Drill into one element + its actual rendered children. Deeper than inspect; use when inspect shows truncated=true.',
+    description: 'Drill into one element + its actual rendered children (deeper than inspect).',
     argsSchema: SnapshotArgsSchema,
     resultSchema: SnapshotResultSchema,
   },
@@ -193,7 +316,7 @@ export const TOOLS: Record<string, ToolSpec> = {
     resultSchema: LongPressResultSchema,
   },
   type: {
-    description: 'Set text in a TextInput. Replaces the value unless append=true.',
+    description: 'Set text in a TextInput. Replaces the value (use append:true to append).',
     argsSchema: TypeArgsSchema,
     resultSchema: TypeResultSchema,
   },
@@ -206,5 +329,100 @@ export const TOOLS: Record<string, ToolSpec> = {
     description: 'Scroll a virtualized list (FlatList/SectionList) so items [from..to] are rendered, then return them.',
     argsSchema: ExpandListArgsSchema,
     resultSchema: ExpandListResultSchema,
+  },
+  swipe: {
+    description: 'Swipe/drag from an element by (dx, dy). Fires pressIn → move → pressOut on the scrollable/pressable ancestor.',
+    argsSchema: SwipeArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  screenshot: {
+    description: 'Capture the screen. Returns base64 PNG (native) or a tree fallback.',
+    argsSchema: ScreenshotArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  waitFor: {
+    description: 'Poll inspect until an element with the given testID or text appears. Useful after navigation/async.',
+    argsSchema: WaitForArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  readScreen: {
+    description: 'Extract all visible text as a flat list (fast — no tree).',
+    argsSchema: ReadScreenArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  layout: {
+    description: 'Precise element measurement + overflow detection. The "is it broken?" check.',
+    argsSchema: LayoutArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  navigate: {
+    description: 'Navigate to a route via expo-router (deep link).',
+    argsSchema: NavigateArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  back: {
+    description: 'Go back in the navigation stack.',
+    argsSchema: BackArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  assertVisible: {
+    description: 'Assert an element is visible (waits up to timeoutMs). Throws if not found.',
+    argsSchema: AssertVisibleArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  assertText: {
+    description: "Assert an element's text matches exactly.",
+    argsSchema: AssertTextArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  assertEnabled: {
+    description: 'Assert an element is enabled (not disabled).',
+    argsSchema: AssertEnabledArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  pinch: {
+    description: 'Pinch/zoom gesture (multi-touch). For maps/images with zoom support.',
+    argsSchema: PinchArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  visibleText: {
+    description: 'Lean on-screen inventory: text/value/placeholder/role/testID with REAL frames. Use this instead of raw inspect() + JSON parsing.',
+    argsSchema: VisibleTextArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  tapText: {
+    description: 'Find a visible element by exact text (or contains) and press it. Verifies the screen actually changed; retries up the view hierarchy (icons/labels inside Pressables).',
+    argsSchema: TapTextArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  tapXY: {
+    description: 'Press whatever is at a screen point — deepest element containing (x,y), then its pressable ancestors. Use for icon-only buttons (no text).',
+    argsSchema: TapXYArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  clickables: {
+    description: 'Inventory of tappable-looking elements (accessibilityRole button/tab/etc or pressable-ish names) with refs and frames.',
+    argsSchema: ClickablesArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  fill: {
+    description: 'Find a visible TextInput by placeholder/value/text and set its value (fires onChangeText). No ref hunting.',
+    argsSchema: FillArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  waitGone: {
+    description: 'Poll until a text (exact or contains) disappears from the screen — sheet dismissed, alert cleared, navigation happened.',
+    argsSchema: WaitGoneArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  find: {
+    description: 'Search visible elements without tapping: filter by text (substring on text+accessibilityLabel), testID, name, role, pressable. Use to locate icons/inputs and get refs before acting.',
+    argsSchema: FindArgsSchema,
+    resultSchema: LooseResultSchema,
+  },
+  scrollIntoView: {
+    description: 'Swipe-scroll until an element (text/contains/testID/ref) is on screen; returns its ref+frame. Throws NOT_VISIBLE if it never becomes visible (says whether it was found-but-offscreen vs not-in-tree).',
+    argsSchema: ScrollIntoViewArgsSchema,
+    resultSchema: LooseResultSchema,
   },
 };

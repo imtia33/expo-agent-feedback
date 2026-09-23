@@ -1,14 +1,17 @@
 {
   "name": "expo-eyes-app",
-  "version": "0.2.1",
+  "version": "0.2.1-alpha.1",
   "description": "Eyes and fingers for AI agents on Expo apps — in-app SDK (pure JS, works in Expo Go)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "prepublishOnly": "npm run build",
-    "postinstall": "node scripts/postinstall.js"
+    "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
     "react": ">=19.0.0",
@@ -18,6 +21,11 @@
   "devDependencies": {
     "@types/react": "^19.0.0",
     "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imtia33/expo-agent-feedback.git",
+    "directory": "packages/expo-eyes-app"
   },
   "keywords": [
     "expo",

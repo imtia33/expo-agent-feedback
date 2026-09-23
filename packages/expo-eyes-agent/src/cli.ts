@@ -2,20 +2,13 @@
 /**
  * CLI — `npx expo-eyes-agent <tool> [args]`
  *
- * Usage:
- *   npx expo-eyes-agent inspect
- *   npx expo-eyes-agent snapshot --ref r5
- *   npx expo-eyes-agent tap --ref r5
- *   npx expo-eyes-agent longPress --ref r5 --durationMs 800
- *   npx expo-eyes-agent type --ref r7 --text "hello"
- *   npx expo-eyes-agent scrollTo --ref r10 --y 500
- *   npx expo-eyes-agent expandList --listRef r10 --from 100 --to 110
- *   npx expo-eyes-agent health
- *   npx expo-eyes-agent events
+ * Supports ALL relay tools (26) plus the special commands health/tools/events.
+ * Args are passed as --key value pairs and coerced/validated against the
+ * same zod schemas the SDK and MCP server use.
  *
  * Env vars (or flags):
  *   EXPO_EYES_RELAY_URL  (default http://localhost:8765)
- *   EXPO_EYES_TOKEN      (required)
+ *   EXPO_EYES_TOKEN      (required unless the relay runs open)
  *
  * Output: pretty-printed JSON to stdout. Errors go to stderr with exit code 1.
  */
@@ -35,6 +28,42 @@ function printJson(obj: unknown): void {
 
 function printError(message: string): void {
   console.error(`Error: ${message}`);
+}
+
+/** Flags that must be coerced from CLI strings to numbers. */
+const NUMERIC_FLAGS = new Set([
+  'durationMs', 'x', 'y', 'amount', 'from', 'to', 'timeoutMs', 'intervalMs',
+  'index', 'limit', 'maxSwipes', 'swipeDistance', 'scale', 'steps', 'dx', 'dy',
+]);
+
+/** Flags that must be coerced from CLI strings to booleans. */
+const BOOLEAN_FLAGS = new Set(['append', 'animated', 'verify', 'refresh', 'pressable']);
+
+/**
+ * Build a tool args object from parsed CLI values.
+ * Numbers/booleans are coerced per the flag tables above; everything else
+ * stays a string and is validated by the zod schema inside the client.
+ */
+function buildArgs(toolName: string, values: Record<string, unknown>): Record<string, unknown> {
+  const spec = TOOLS[toolName];
+  const args: Record<string, unknown> = {};
+  const shape: Record<string, unknown> | undefined = spec ? (spec.argsSchema as any).shape : undefined;
+  for (const [key, raw] of Object.entries(values)) {
+    if (raw === undefined) continue;
+    if (NUMERIC_FLAGS.has(key)) {
+      const n = Number(raw);
+      if (Number.isNaN(n)) throw new EyesError(`--${key} must be a number (got "${raw}")`, 'BAD_ARGS');
+      args[key] = n;
+    } else if (BOOLEAN_FLAGS.has(key)) {
+      if (typeof raw === 'boolean') args[key] = raw;
+      else if (raw === 'true') args[key] = true;
+      else if (raw === 'false') args[key] = false;
+      else throw new EyesError(`--${key} must be true or false (got "${raw}")`, 'BAD_ARGS');
+    } else if (shape && key in shape) {
+      args[key] = raw;
+    }
+  }
+  return args;
 }
 
 async function main() {
@@ -58,9 +87,18 @@ async function main() {
     return;
   }
 
-  // Parse remaining args as --key value pairs
+  if (tool === 'list-tools') {
+    // Offline: print the built-in tool registry (no relay needed)
+    for (const [name, spec] of Object.entries(TOOLS)) {
+      console.log(`${name.padEnd(16)} ${spec.description}`);
+    }
+    return;
+  }
+
+  // Parse remaining args as --key value pairs. strict:false lets the CLI
+  // accept any tool's flags without a hand-maintained options list.
   const restArgs = args.slice(1);
-  const { values, positionals } = parseArgs({
+  const { values } = parseArgs({
     args: restArgs,
     options: {
       ref: { type: 'string' },
@@ -73,8 +111,29 @@ async function main() {
       durationMs: { type: 'string' },
       from: { type: 'string' },
       to: { type: 'string' },
+      contains: { type: 'string' },
+      placeholder: { type: 'string' },
+      value: { type: 'string' },
+      index: { type: 'string' },
+      role: { type: 'string' },
+      testID: { type: 'string' },
+      name: { type: 'string' },
+      limit: { type: 'string' },
+      route: { type: 'string' },
+      params: { type: 'string' },
+      timeoutMs: { type: 'string' },
+      intervalMs: { type: 'string' },
+      maxSwipes: { type: 'string' },
+      swipeDistance: { type: 'string' },
+      scale: { type: 'string' },
+      steps: { type: 'string' },
+      dx: { type: 'string' },
+      dy: { type: 'string' },
       append: { type: 'boolean', default: false },
       animated: { type: 'boolean', default: true },
+      verify: { type: 'string' },
+      refresh: { type: 'string' },
+      pressable: { type: 'string' },
       'relay-url': { type: 'string' },
       token: { type: 'string' },
     },
@@ -83,11 +142,12 @@ async function main() {
   });
 
   const relayUrl = String(values['relay-url'] || '') || getEnv('EXPO_EYES_RELAY_URL', 'http://localhost:8765')!;
-  const token = String(values.token || '') || getEnv('EXPO_EYES_TOKEN');
+  const token = String(values.token || '') || getEnv('EXPO_EYES_TOKEN', '')!;
 
-  if (!token) {
-    printError('Token required. Set EXPO_EYES_TOKEN env var or pass --token.');
-    process.exit(1);
+  if (!token && relayUrl.startsWith('http')) {
+    // Open relays (no auth) are supported — empty token is fine there.
+    // We still warn so silent auth failures are easier to debug.
+    console.error('[cli] no token set (EXPO_EYES_TOKEN or --token). Continuing — open relays need no auth.');
   }
 
   const eyes = new Eyes({ relayUrl, token });
@@ -95,13 +155,11 @@ async function main() {
   try {
     switch (tool) {
       case 'health': {
-        const result = await eyes.health();
-        printJson(result);
+        printJson(await eyes.health());
         return;
       }
       case 'tools': {
-        const result = await eyes.listTools();
-        printJson(result);
+        printJson(await eyes.listTools());
         return;
       }
       case 'events': {
@@ -110,83 +168,21 @@ async function main() {
         }
         return;
       }
-      case 'inspect': {
-        const result = await eyes.inspect({});
+      default: {
+        if (!TOOLS[tool]) {
+          printError(`Unknown tool: ${tool}. Run "npx expo-eyes-agent list-tools" for the full list.`);
+          process.exit(1);
+        }
+        const toolArgs = buildArgs(tool, values as Record<string, unknown>);
+        const result = await (eyes as any).call(tool, toolArgs);
         printJson(result);
+        // Composite tools report failures as ok:false (not exceptions) —
+        // surface that in the exit code so scripts and agent loops react.
+        if (result && typeof result === 'object' && (result as any).ok === false) {
+          process.exit(1);
+        }
         return;
       }
-      case 'snapshot': {
-        const ref = String(values.ref || '');
-        if (!ref) throw new EyesError('--ref is required', 'BAD_ARGS');
-        const result = await eyes.snapshot({ ref });
-        printJson(result);
-        return;
-      }
-      case 'tap': {
-        const ref = String(values.ref || '');
-        if (!ref) throw new EyesError('--ref is required', 'BAD_ARGS');
-        const result = await eyes.tap({ ref });
-        printJson(result);
-        return;
-      }
-      case 'longPress': {
-        const ref = String(values.ref || '');
-        if (!ref) throw new EyesError('--ref is required', 'BAD_ARGS');
-        const durationMsStr = String(values.durationMs || '');
-        const result = await eyes.longPress({
-          ref,
-          durationMs: durationMsStr ? parseInt(durationMsStr, 10) : undefined,
-        });
-        printJson(result);
-        return;
-      }
-      case 'type': {
-        const ref = String(values.ref || '');
-        if (!ref) throw new EyesError('--ref is required', 'BAD_ARGS');
-        const text = String(values.text || '');
-        if (!text && text !== '') throw new EyesError('--text is required', 'BAD_ARGS');
-        const result = await eyes.type({
-          ref,
-          text,
-          append: values.append === true,
-        });
-        printJson(result);
-        return;
-      }
-      case 'scrollTo': {
-        const ref = String(values.ref || '');
-        if (!ref) throw new EyesError('--ref is required', 'BAD_ARGS');
-        const xStr = String(values.x || '');
-        const yStr = String(values.y || '');
-        const amountStr = String(values.amount || '');
-        const result = await eyes.scrollTo({
-          ref,
-          x: xStr ? parseInt(xStr, 10) : undefined,
-          y: yStr ? parseInt(yStr, 10) : undefined,
-          animated: values.animated !== false,
-          direction: String(values.direction || '') as any || undefined,
-          amount: amountStr ? parseInt(amountStr, 10) : undefined,
-        });
-        printJson(result);
-        return;
-      }
-      case 'expandList': {
-        const listRef = String(values.listRef || '');
-        if (!listRef) throw new EyesError('--listRef is required', 'BAD_ARGS');
-        const fromStr = String(values.from || '');
-        const toStr = String(values.to || '');
-        const result = await eyes.expandList({
-          listRef,
-          from: fromStr ? parseInt(fromStr, 10) : undefined,
-          to: toStr ? parseInt(toStr, 10) : undefined,
-        });
-        printJson(result);
-        return;
-      }
-      default:
-        printError(`Unknown tool: ${tool}`);
-        printUsage();
-        process.exit(1);
     }
   } catch (e: any) {
     if (e instanceof EyesError) {
@@ -204,12 +200,13 @@ expo-eyes-agent — agent SDK + MCP server + CLI for the expo-eyes relay
 
 Usage:
   npx expo-eyes-agent <tool> [options]
-  npx expo-eyes-agent mcp                # start MCP server on stdio
+  npx expo-eyes-agent mcp                # start MCP server on stdio (all 26 tools)
   npx expo-eyes-agent health             # relay + phone status
-  npx expo-eyes-agent tools              # list available tools
+  npx expo-eyes-agent tools              # list tools from the RELAY (live)
+  npx expo-eyes-agent list-tools         # list tools from the built-in registry (offline)
   npx expo-eyes-agent events             # stream phone events (Ctrl-C to stop)
 
-Tools:
+Core tools:
   inspect                                # return the visible tree
   snapshot      --ref <id>               # drill into one element
   tap           --ref <id>               # tap an element
@@ -218,13 +215,35 @@ Tools:
   scrollTo      --ref <id> [--x N] [--y N] [--direction up|down|left|right] [--amount N]
   expandList    --listRef <id> [--from N] [--to N]
 
+Composite tools (no ref hunting — agents: prefer these):
+  visibleText                            # lean on-screen inventory with frames
+  tapText       --text "Sign in"         # find + press by text (verified)
+  tapXY         --x 100 --y 500          # press at a screen point
+  clickables                             # inventory of tappable elements
+  fill          --text "hi@example.com" --placeholder "Email"
+  find          --text "Save" [--pressable]
+  scrollIntoView --text "footer"         # swipe until visible
+  waitGone      --text "Loading..."      # poll until gone
+  waitFor       --text "Dashboard"       # poll until appears
+  navigate      --route "/playground"    # expo-router deep link
+  back                                   # go back
+  assertVisible --text "Welcome"         # throws if absent
+  assertText    --testID t_title --text "Home"
+  assertEnabled --testID t_submit
+  swipe         --ref <id> --dx 0 --dy -400
+  pinch         --ref <id> --direction out
+  screenshot    [--ref <id>]
+  readScreen                             # flat text list
+  layout        [--ref <id>]             # measurement + overflow audit
+
 Options:
   --relay-url URL    relay base URL (default: $EXPO_EYES_RELAY_URL or http://localhost:8765)
   --token TOKEN      auth token (default: $EXPO_EYES_TOKEN)
 
 Examples:
-  EXPO_EYES_TOKEN=abc npx expo-eyes-agent inspect
-  npx expo-eyes-agent tap --ref r5 --token abc
+  EXPO_EYES_TOKEN=abc npx expo-eyes-agent visibleText
+  npx expo-eyes-agent tapText --text "Sign in" --token abc
+  npx expo-eyes-agent fill --text "hi@example.com" --placeholder Email
   npx expo-eyes-agent scrollTo --ref r10 --direction down --amount 200
   npx expo-eyes-agent mcp    # for Claude Desktop / Cursor
 `);

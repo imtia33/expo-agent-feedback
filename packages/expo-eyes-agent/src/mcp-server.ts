@@ -1,17 +1,12 @@
 #!/usr/bin/env node
 /**
- * MCP server — exposes all expo-eyes tools to MCP clients (Claude Desktop,
- * Cursor, Continue.dev, etc.) over stdio.
+ * MCP server — exposes ALL expo-eyes tools (26) to MCP clients (Claude
+ * Desktop, Cursor, Continue.dev, etc.) over stdio.
  *
- * Verified against @modelcontextprotocol/sdk@1.30.0
- * (see docs/libraries/mcp-sdk-API-summary.md).
+ * Every tool in TOOLS (schemas.ts) is registered automatically — adding a
+ * tool there is all it takes to expose it over MCP.
  *
- * Key API specifics:
- *   - Server class: McpServer from '@modelcontextprotocol/sdk/server/mcp.js'
- *   - Tool registration: server.registerTool(name, config, cb)
- *   - Schemas: zod shapes (the SDK converts them to JSON schemas internally)
- *   - Handler returns: { content: [{ type: 'text', text: '...' }] }
- *   - Transport: StdioServerTransport from '@modelcontextprotocol/sdk/server/stdio.js'
+ * Verified against @modelcontextprotocol/sdk@1.30.x.
  *
  * Usage:
  *   npx expo-eyes-agent mcp --relay-url=http://localhost:8765 --token=...
@@ -34,9 +29,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Eyes } from './eyes.js';
-import { TOOLS, InspectArgsSchema, SnapshotArgsSchema, TapArgsSchema, LongPressArgsSchema, TypeArgsSchema, ScrollToArgsSchema, ExpandListArgsSchema } from './schemas.js';
+import { TOOLS } from './schemas.js';
+import { createRequire } from 'node:module';
 
-function getEnvOrArg(key: string, args: string[]): string | undefined {
+function getEnvOrArg(key: string): string | undefined {
   // Check --key=value or --key value patterns
   const argKey = `--${key.toLowerCase().replace(/_/g, '-')}`;
   for (let i = 0; i < process.argv.length; i++) {
@@ -47,9 +43,18 @@ function getEnvOrArg(key: string, args: string[]): string | undefined {
   return process.env[key];
 }
 
+function packageVersion(): string {
+  try {
+    const require = createRequire(import.meta.url);
+    return require('../package.json').version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 async function main() {
-  const relayUrl = getEnvOrArg('EXPO_EYES_RELAY_URL', process.argv);
-  const token = getEnvOrArg('EXPO_EYES_TOKEN', process.argv);
+  const relayUrl = getEnvOrArg('EXPO_EYES_RELAY_URL');
+  const token = getEnvOrArg('EXPO_EYES_TOKEN');
 
   if (!relayUrl || !token) {
     console.error('Usage: npx expo-eyes-agent mcp --relay-url=URL --token=TOKEN');
@@ -61,129 +66,35 @@ async function main() {
 
   const server = new McpServer({
     name: 'expo-eyes',
-    version: '0.1.0',
+    version: packageVersion(),
   });
 
-  // Register each tool. The schema is the zod shape (the SDK converts to JSON schema).
-  // Handler calls eyes[tool](args) and returns the result as JSON text.
-
-  server.registerTool(
-    'inspect',
-    {
-      description: TOOLS.inspect.description,
-      inputSchema: InspectArgsSchema.shape,
-    },
-    async (args) => {
-      try {
-        const result = await eyes.inspect(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
-      }
-    },
-  );
-
-  server.registerTool(
-    'snapshot',
-    {
-      description: TOOLS.snapshot.description,
-      inputSchema: SnapshotArgsSchema.shape,
-    },
-    async (args) => {
-      try {
-        const result = await eyes.snapshot(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
-      }
-    },
-  );
-
-  server.registerTool(
-    'tap',
-    {
-      description: TOOLS.tap.description,
-      inputSchema: TapArgsSchema.shape,
-    },
-    async (args) => {
-      try {
-        const result = await eyes.tap(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
-      }
-    },
-  );
-
-  server.registerTool(
-    'longPress',
-    {
-      description: TOOLS.longPress.description,
-      inputSchema: LongPressArgsSchema.shape,
-    },
-    async (args) => {
-      try {
-        const result = await eyes.longPress(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
-      }
-    },
-  );
-
-  server.registerTool(
-    'type',
-    {
-      description: TOOLS.type.description,
-      inputSchema: TypeArgsSchema.shape,
-    },
-    async (args) => {
-      try {
-        const result = await eyes.type(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
-      }
-    },
-  );
-
-  server.registerTool(
-    'scrollTo',
-    {
-      description: TOOLS.scrollTo.description,
-      inputSchema: ScrollToArgsSchema.shape,
-    },
-    async (args) => {
-      try {
-        const result = await eyes.scrollTo(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
-      }
-    },
-  );
-
-  server.registerTool(
-    'expandList',
-    {
-      description: TOOLS.expandList.description,
-      inputSchema: ExpandListArgsSchema.shape,
-    },
-    async (args) => {
-      try {
-        const result = await eyes.expandList(args);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (e: any) {
-        return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
-      }
-    },
-  );
+  // Register every tool from the shared registry. The zod shape is converted
+  // to a JSON schema by the MCP SDK. Handlers reuse the typed Eyes client,
+  // which validates args client-side before hitting the relay.
+  for (const [name, spec] of Object.entries(TOOLS)) {
+    server.registerTool(
+      name,
+      {
+        description: spec.description,
+        inputSchema: (spec.argsSchema as any).shape ?? {},
+      },
+      async (args: Record<string, unknown>) => {
+        try {
+          const result = await (eyes as any).call(name, args ?? {});
+          return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+        }
+      },
+    );
+  }
 
   // Start the stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Note: don't log to stdout — that's the MCP wire. Log to stderr.
-  console.error('[expo-eyes-agent] MCP server ready on stdio');
+  console.error(`[expo-eyes-agent] MCP server ready on stdio — ${Object.keys(TOOLS).length} tools registered`);
 }
 
 main().catch((e) => {

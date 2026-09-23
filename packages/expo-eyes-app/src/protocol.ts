@@ -8,7 +8,6 @@
  * Every message has a `type` field. Tool calls and results share a `callId`
  * so the relay can correlate them.
  */
-
 // ─── Tool call (Relay → Phone) ────────────────────────────────────────
 
 export interface ToolCall {
@@ -72,16 +71,29 @@ export type PhoneEvent = LogEvent | ErrorEvent | PhoneReadyEvent;
 
 // ─── Primitive names (app side) ───────────────────────────────────────
 //
-// The app SDK exposes only these 5 primitives. The relay implements the
-// agent-facing tools (inspect, snapshot, tap, type, scrollTo, expandList,
-// longPress) by composing these primitives.
+// The app SDK exposes these primitives over WS. The relay composes them
+// into the 26 agent-facing tools (inspect, tap, visibleText, fill, …).
+// Keep this union in sync with PRIMITIVES in EyesProvider.tsx.
 
 export type PrimitiveName =
-  | 'getTree'        // → raw fiber tree (no refs/stableIds/pruning)
-  | 'dispatchEvent'  // → fire onPress/onChangeText/etc. on a fiber
-  | 'readLayout'     // → x/y/width/height for a fiber
-  | 'scroll'         // → scrollTo on a scrollable fiber
-  | 'scrollToIndex'; // → scrollToIndex on a list fiber
+  | 'inspectAtPoint'      // → element at a screen point (RN inspector API)
+  | 'listVisibleElements' // → flat list of visible elements with frames
+  | 'dispatchEvent'       // → fire onPress/onChangeText/etc. on a viewTag
+  | 'scroll'              // → scrollTo / scrollBy on a scrollable
+  | 'scrollToIndex'       // → scrollToIndex on a list
+  | 'diagnostics'         // → runtime diagnostics dump
+  | 'swipe'               // → drag gesture between two points
+  | 'screenshot'          // → base64 PNG capture (tree fallback in Expo Go)
+  | 'waitForElement'      // → poll for a testID/text to appear
+  | 'readScreen'          // → flat list of visible texts
+  | 'layout'              // → precise measurement + overflow audit
+  | 'navigate'            // → expo-router deep link
+  | 'back'                // → navigation goBack
+  | 'assertVisible'       // → assert element on screen
+  | 'assertText'          // → assert exact text
+  | 'assertEnabled'       // → assert not disabled
+  | 'pinch'               // → multi-touch zoom gesture
+  | 'ping';               // → liveness pong + uptime + appState
 
 // Backward-compat alias
 export type ToolName = PrimitiveName;

@@ -21,6 +21,26 @@ import type {
   TypeArgs, TypeResult,
   ScrollToArgs, ScrollToResult,
   ExpandListArgs, ExpandListResult,
+  SwipeArgs, SwipeResult,
+  ScreenshotArgs, ScreenshotResult,
+  WaitForArgs, WaitForResult,
+  ReadScreenArgs, ReadScreenResult,
+  LayoutArgs, LayoutResult,
+  NavigateArgs, NavigateResult,
+  BackArgs, BackResult,
+  AssertVisibleArgs, AssertVisibleResult,
+  AssertTextArgs, AssertTextResult,
+  AssertEnabledArgs, AssertEnabledResult,
+  PinchArgs, PinchResult,
+  VisibleTextArgs, VisibleTextResult,
+  TapTextArgs, TapTextResult,
+  TapXYArgs, TapXYResult,
+  ClickablesArgs, ClickablesResult,
+  FillArgs, FillResult,
+  WaitGoneArgs, WaitGoneResult,
+  FindArgs, FindResult,
+  ScrollIntoViewArgs, ScrollIntoViewResult,
+  ToolMap,
   ToolName,
 } from './types.js';
 
@@ -73,6 +93,7 @@ export class EyesClient {
   }
 
   // ─── Public API: typed tool methods ──────────────────────────────────
+  // One thin wrapper per tool — all routed through the validated callTool().
 
   async inspect(args: InspectArgs = {}): Promise<InspectResult> {
     return this.callTool('inspect', args);
@@ -100,6 +121,90 @@ export class EyesClient {
 
   async expandList(args: ExpandListArgs): Promise<ExpandListResult> {
     return this.callTool('expandList', args);
+  }
+
+  async swipe(args: SwipeArgs): Promise<SwipeResult> {
+    return this.callTool('swipe', args);
+  }
+
+  async screenshot(args: ScreenshotArgs = {}): Promise<ScreenshotResult> {
+    return this.callTool('screenshot', args);
+  }
+
+  async waitFor(args: WaitForArgs): Promise<WaitForResult> {
+    return this.callTool('waitFor', args);
+  }
+
+  async readScreen(args: ReadScreenArgs = {}): Promise<ReadScreenResult> {
+    return this.callTool('readScreen', args);
+  }
+
+  async layout(args: LayoutArgs = {}): Promise<LayoutResult> {
+    return this.callTool('layout', args);
+  }
+
+  async navigate(args: NavigateArgs): Promise<NavigateResult> {
+    return this.callTool('navigate', args);
+  }
+
+  async back(args: BackArgs = {}): Promise<BackResult> {
+    return this.callTool('back', args);
+  }
+
+  async assertVisible(args: AssertVisibleArgs): Promise<AssertVisibleResult> {
+    return this.callTool('assertVisible', args);
+  }
+
+  async assertText(args: AssertTextArgs): Promise<AssertTextResult> {
+    return this.callTool('assertText', args);
+  }
+
+  async assertEnabled(args: AssertEnabledArgs): Promise<AssertEnabledResult> {
+    return this.callTool('assertEnabled', args);
+  }
+
+  async pinch(args: PinchArgs): Promise<PinchResult> {
+    return this.callTool('pinch', args);
+  }
+
+  async visibleText(args: VisibleTextArgs = {}): Promise<VisibleTextResult> {
+    return this.callTool('visibleText', args);
+  }
+
+  async tapText(args: TapTextArgs): Promise<TapTextResult> {
+    return this.callTool('tapText', args);
+  }
+
+  async tapXY(args: TapXYArgs): Promise<TapXYResult> {
+    return this.callTool('tapXY', args);
+  }
+
+  async clickables(args: ClickablesArgs = {}): Promise<ClickablesResult> {
+    return this.callTool('clickables', args);
+  }
+
+  async fill(args: FillArgs): Promise<FillResult> {
+    return this.callTool('fill', args);
+  }
+
+  async waitGone(args: WaitGoneArgs): Promise<WaitGoneResult> {
+    return this.callTool('waitGone', args);
+  }
+
+  async find(args: FindArgs): Promise<FindResult> {
+    return this.callTool('find', args);
+  }
+
+  async scrollIntoView(args: ScrollIntoViewArgs): Promise<ScrollIntoViewResult> {
+    return this.callTool('scrollIntoView', args);
+  }
+
+  /**
+   * Generic tool call — validate + send any registered tool by name.
+   * Useful for scripts/agents that build tool calls dynamically.
+   */
+  async call<K extends ToolName>(tool: K, args: ToolMap[K]['args']): Promise<ToolMap[K]['result']> {
+    return this.callTool(tool, args);
   }
 
   // ─── Health / status ─────────────────────────────────────────────────

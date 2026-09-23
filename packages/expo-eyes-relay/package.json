@@ -1,11 +1,16 @@
 {
   "name": "expo-eyes-relay",
-  "version": "0.1.0",
-  "description": "Relay server for expo-eyes — bridges agent HTTP calls to phone WebSocket connections",
+  "version": "0.1.0-alpha.1",
+  "description": "Relay server for expo-eyes — bridges agent HTTP calls to phone WebSocket connections (zero build step, plain Node.js)",
   "main": "src/index.js",
   "bin": {
     "expo-eyes-relay": "src/index.js"
   },
+  "files": [
+    "src",
+    "nginx.conf.example",
+    "README.md"
+  ],
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/index.js --verbose"
@@ -16,6 +21,11 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imtia33/expo-agent-feedback.git",
+    "directory": "packages/expo-eyes-relay"
   },
   "keywords": [
     "expo",

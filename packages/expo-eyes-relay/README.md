@@ -1,97 +1,127 @@
 # expo-eyes-relay
 
-> Bridges agent HTTP calls to phone WebSocket connections.
-> Verified against `ws@8.21.3` and `express@5.2.1` (see `../../docs/libraries/`).
+> The bridge between agents and phones. Exposes 26 agent-friendly tools over
+> a bearer-auth HTTP API; phones connect in over WebSocket. Plain Node.js —
+> no build step, two dependencies (express, ws).
+
+Part of [expo-eyes](https://github.com/imtia33/expo-agent-feedback) — pairs
+with [expo-eyes-app](https://www.npmjs.com/package/expo-eyes-app) (in the
+phone) and [expo-eyes-agent](https://www.npmjs.com/package/expo-eyes-agent)
+(agent side: SDK / MCP / CLI), or drive it with plain `curl`.
 
 ## Quick start
 
 ```bash
-cd packages/expo-eyes-relay
-npm install
-npm start
+npm install expo-eyes-relay
+npx expo-eyes-relay --token $(openssl rand -hex 12)
 ```
-
-On first run, a random auth token is generated and saved to `~/.expo-eyes-token`. The relay prints:
 
 ```
 ╔══════════════════════════════════════════════════════════════════╗
 ║                        expo-eyes-relay                           ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  HTTP (agent):  http://0.0.0.0:8765                              ║
+║  HTTP (local):  http://0.0.0.0:8765                              ║
 ║  WS   (phone):  ws://0.0.0.0:8766                                ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Auth token:  <hex string>                                       ║
+║  Auth: Bearer token required                                     ║
 ╚══════════════════════════════════════════════════════════════════╝
 ```
 
-## Configuration (env vars)
+Add `<EyesProvider>` to your Expo app (see
+[expo-eyes-app](https://www.npmjs.com/package/expo-eyes-app)) and verify the
+full chain:
 
-| Var | Default | Description |
+```bash
+curl http://localhost:8765/ping
+# → { "ok": true, "phoneReplied": true, "roundTripMs": 195, "hint": null }
+```
+
+## Token behavior (read this)
+
+| Flags | Behavior |
+|---|---|
+| *(no token)* | Open relay, no auth — fine for quick LAN dev |
+| `--token X` | Bearer auth enforced on WS (phone) + HTTP (agent) |
+| `--tunnel` without token | **Refused at startup** — a public, unauthenticated phone controller is a remote-access Trojan |
+
+## Configuration
+
+Flags and env vars are interchangeable (`--http-port 9000` ≡
+`EXPO_EYES_HTTP_PORT=9000`):
+
+| Env var / flag | Default | Description |
 |---|---|---|
 | `EXPO_EYES_HTTP_PORT` | `8765` | Agent-facing HTTP port |
 | `EXPO_EYES_WS_PORT` | `8766` | Phone-facing WebSocket port |
 | `EXPO_EYES_HOST` | `0.0.0.0` | Bind address |
-| `EXPO_EYES_TOKEN` | (generated) | Auth token (both phone and agent must present this) |
-| `EXPO_EYES_TOOL_TIMEOUT_MS` | `30000` | Per-tool-call timeout |
-| `EXPO_EYES_VERBOSE` | `false` | Verbose logging |
-| `EXPO_EYES_CORS` | `true` | Allow CORS (useful if agent runs in browser) |
+| `EXPO_EYES_TOKEN` | *(none)* | Bearer token (phone **and** agent) |
+| `EXPO_EYES_TUNNEL` | off | Publish the HTTP port via tunnel |
+| `EXPO_EYES_TUNNEL_PROVIDER` | `auto` | `cloudflare` \| `ngrok` \| `localtunnel` |
+| `EXPO_EYES_TOOL_TIMEOUT_MS` | `30000` | Per-tool-call timeout (→ HTTP 504) |
+| `EXPO_EYES_CORS` | on | CORS headers for browser agents |
+| `EXPO_EYES_VERBOSE` | off | Session/tool-call logging |
 
-## API
+`--app-url exp://192.168.1.5:8081` is optional metadata exposed in `/health`
+so the agent knows which app it's driving.
 
-### `GET /health`
-No auth. Returns relay + phone status.
+## HTTP API
 
-### `GET /tools`
-Returns the list of available tools and their arg schemas.
+| Endpoint | Auth | Description |
+|---|---|---|
+| `GET /` `GET /health` | no | Relay + phone status, endpoint list |
+| `GET /ping[?timeout=ms]` | no | **Full-chain liveness**: relay → WS → phone primitive → back, with an actionable `hint` when a link is broken |
+| `GET /status` | no | Session detail (multi-phone list, pending calls) |
+| `GET /diagnostics` | no | Phone runtime diagnostics dump |
+| `GET /tools` | yes | All 26 tools with descriptions + arg docs |
+| `POST /tool/:name` | yes | Invoke a tool; body = args JSON |
+| `GET /events?since=N` | yes | Phone event stream (logs, errors, crashes) |
 
-### `POST /tool/:name`
-Invoke a tool. Body = JSON object of args. Requires `Authorization: Bearer <token>`.
+Tool names + args are documented live by `GET /tools`. Highlights:
+`inspect`, `visibleText`, `find`, `clickables`, `layout`, `screenshot` (eyes);
+`tap`, `tapText`, `tapXY`, `longPress`, `type`, `fill`, `scrollTo`,
+`scrollIntoView`, `swipe`, `pinch`, `navigate`, `back` (fingers); `waitFor`,
+`waitGone`, `assertVisible`, `assertText`, `assertEnabled`, `expandList`
+(waiting/assertions).
 
 ```bash
-# Inspect the visible tree
-curl -X POST -H "Authorization: Bearer $TOKEN" \
-     http://localhost:8765/tool/inspect
-
-# Tap a button (ref from inspect)
-curl -X POST -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"ref":"r2"}' \
-     http://localhost:8765/tool/tap
+curl -X POST http://localhost:8765/tool/tapText \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"Sign in"}'
 ```
 
-### `GET /events?since=TIMESTAMP&count=N`
-Returns recent phone events (logs, errors). Optional `since` filters by timestamp.
+Error codes map to HTTP status: `NO_PHONE` → 503, `TIMEOUT` → 504,
+`REF_NOT_FOUND` → 410, `BAD_ARGS` → 400.
 
-## Tools available in v1
+## Multi-phone
 
-| Tool | Args | Returns |
-|---|---|---|
-| `inspect` | — | `{ tree, totalNodes, prunedNodes, renderTimeMs }` |
-| `snapshot` | `ref` | `{ element, renderTimeMs }` |
-| `tap` | `ref` | `{ ok, refsStillValid }` |
-| `longPress` | `ref`, `durationMs?` | `{ ok, refsStillValid }` |
-| `type` | `ref`, `text`, `append?` | `{ ok, refsStillValid, newValue }` |
-| `scrollTo` | `ref`, `x?`, `y?`, `animated?`, `direction?`, `amount?` | `{ ok, scrolledTo, refsStillValid }` |
-| `expandList` | `listRef`, `from?`, `to?` | `{ items, renderedRange, itemCount, renderTimeMs }` |
+Every phone connects as its own session (platform + deviceId). Reconnects
+replace their own session; different devices coexist. Routing defaults to the
+newest native (ios/android) phone — a web preview never steals tool calls —
+and `POST /tool/:name?session=<sessionId>` targets a specific one. `GET
+/health` lists every connected session.
 
-## Exposing over HTTPS (for remote agents)
-
-If your agent runs on a remote machine (e.g. in the cloud), expose the relay via nginx. See [`nginx.conf.example`](./nginx.conf.example).
-
-The phone should still connect to the relay on the local network — both phone and laptop on the same Wi-Fi. The HTTPS URL is for the agent only.
-
-## Auth model
-
-- Both the phone (WS hello) and the agent (HTTP `Authorization` header) must present the same token.
-- Token is generated on first run if not set via env var.
-- Token file: `~/.expo-eyes-token` (mode 600).
-- To rotate: `rm ~/.expo-eyes-token && npm start`.
-
-## Development
+## Remote agents (tunnel)
 
 ```bash
-npm install
-npm run dev   # verbose mode
+npx expo-eyes-relay --tunnel --token $(openssl rand -hex 12)
+```
+
+Publishes the HTTP port via cloudflared (fallbacks: ngrok → localtunnel) and
+prints the public URL. The phone-facing WS stays on your LAN — the phone
+dials out, so it needs nothing public. For a permanent public deployment, put
+nginx/Caddy in front instead — see
+[`nginx.conf.example`](./nginx.conf.example).
+
+## Under the hood
+
+```
+src/index.js           CLI entry, banner, graceful shutdown
+src/config.js          env/flag parsing
+src/ws-server.js       phone-facing WS: hello/token handshake, heartbeat
+src/session-manager.js multi-phone sessions, pending-call correlation, /ping
+src/tool-router.js     26 tools composed from 18 phone primitives (the brains)
+src/http-server.js     Express 5 API for agents
+src/tunnel.js          cloudflared / ngrok / localtunnel lifecycle
 ```
 
 ## License

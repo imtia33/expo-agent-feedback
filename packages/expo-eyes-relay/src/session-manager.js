@@ -1,11 +1,11 @@
 /**
  * session-manager.js — tracks connected phones and pending tool calls.
  *
- * Multi-phone support (v2): tracks a Map of connected phones keyed by a
+ * Multi-phone support: tracks a Map of connected phones keyed by a
  * session ID. When the agent calls a tool, the call is routed to the
- * "active" phone — which prefers native (ios/android) over web. This is
- * critical for the sandbox: the web preview's EyesProvider and Expo Go on
- * a phone both connect, but tool calls should go to the native app.
+ * "active" phone — which prefers native (ios/android) over web. This
+ * matters when a browser preview's EyesProvider and Expo Go on a phone
+ * are both connected: tool calls should go to the native app.
  *
  * Phone preference order:
  *   1. ios / android (Expo Go on a real device or simulator)

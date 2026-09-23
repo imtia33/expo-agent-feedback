@@ -23,7 +23,7 @@
 
 import { EyesClient, EyesError, type EyesClientOptions } from './client.js';
 import { events, type EventsOptions } from './events.js';
-import type { PhoneEvent } from './types.js';
+import type { PhoneEvent, ToolMap, ToolName } from './types.js';
 
 export class Eyes {
   private client: EyesClient;
@@ -45,6 +45,28 @@ export class Eyes {
   type = (args: Parameters<EyesClient['type']>[0]) => this.client.type(args);
   scrollTo = (args: Parameters<EyesClient['scrollTo']>[0]) => this.client.scrollTo(args);
   expandList = (args: Parameters<EyesClient['expandList']>[0]) => this.client.expandList(args);
+  swipe = (args: Parameters<EyesClient['swipe']>[0]) => this.client.swipe(args);
+  screenshot = (args?: Parameters<EyesClient['screenshot']>[0]) => this.client.screenshot(args ?? {});
+  waitFor = (args: Parameters<EyesClient['waitFor']>[0]) => this.client.waitFor(args);
+  readScreen = (args?: Parameters<EyesClient['readScreen']>[0]) => this.client.readScreen(args ?? {});
+  layout = (args?: Parameters<EyesClient['layout']>[0]) => this.client.layout(args ?? {});
+  navigate = (args: Parameters<EyesClient['navigate']>[0]) => this.client.navigate(args);
+  back = (args?: Parameters<EyesClient['back']>[0]) => this.client.back(args ?? {});
+  assertVisible = (args: Parameters<EyesClient['assertVisible']>[0]) => this.client.assertVisible(args);
+  assertText = (args: Parameters<EyesClient['assertText']>[0]) => this.client.assertText(args);
+  assertEnabled = (args: Parameters<EyesClient['assertEnabled']>[0]) => this.client.assertEnabled(args);
+  pinch = (args: Parameters<EyesClient['pinch']>[0]) => this.client.pinch(args);
+  visibleText = (args?: Parameters<EyesClient['visibleText']>[0]) => this.client.visibleText(args ?? {});
+  tapText = (args: Parameters<EyesClient['tapText']>[0]) => this.client.tapText(args);
+  tapXY = (args: Parameters<EyesClient['tapXY']>[0]) => this.client.tapXY(args);
+  clickables = (args?: Parameters<EyesClient['clickables']>[0]) => this.client.clickables(args ?? {});
+  fill = (args: Parameters<EyesClient['fill']>[0]) => this.client.fill(args);
+  waitGone = (args: Parameters<EyesClient['waitGone']>[0]) => this.client.waitGone(args);
+  find = (args: Parameters<EyesClient['find']>[0]) => this.client.find(args);
+  scrollIntoView = (args: Parameters<EyesClient['scrollIntoView']>[0]) => this.client.scrollIntoView(args);
+
+  /** Generic tool call — same validation and retry as the typed methods. */
+  call = <K extends ToolName>(tool: K, args: ToolMap[K]['args']) => this.client.call(tool, args);
 
   // ─── Status ─────────────────────────────────────────────────────────
 

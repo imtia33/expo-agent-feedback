@@ -1,7 +1,7 @@
 {
   "name": "expo-eyes-agent",
-  "version": "0.1.0",
-  "description": "Agent SDK for expo-eyes — typed TypeScript client, MCP server, and CLI for the relay",
+  "version": "0.1.0-alpha.1",
+  "description": "Agent SDK for expo-eyes — typed TypeScript client, MCP server, and CLI for the expo-eyes-relay (26 tools: inspect, tap, type, scroll, assert, find, fill, and more)",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,6 +18,10 @@
       "import": "./dist/mcp-server.js"
     }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -35,6 +39,11 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imtia33/expo-agent-feedback.git",
+    "directory": "packages/expo-eyes-agent"
   },
   "keywords": [
     "expo",

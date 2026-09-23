@@ -1,7 +1,9 @@
 /**
  * config.js — env-var-driven configuration for the relay.
  *
- * Pattern borrowed from upload/config.js (the existing relay).
+ * Every option can be set via `--flag`, `--flag=value`, or the
+ * `EXPO_EYES_*` environment variable. Flags win over env vars unless the
+ * env var is what provides the value.
  */
 
 const fs = require('fs');

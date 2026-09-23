@@ -4,33 +4,33 @@ import { Platform } from 'react-native';
 import { EyesProvider } from 'expo-eyes-app';
 
 /**
- * Root layout.
+ * Root layout — wraps the app in EyesProvider so an AI agent connected to
+ * the relay can see (inspect) and touch (tap/type/scroll) the app.
  *
- * The web preview is stubbed by the public-host-proxy (returns a minimal HTML
- * page for browser requests, never hits Expo's SSR renderer). So Expo runs in
- * native-only mode — no web SSR, no crashes from native-only modules.
+ * Configuration (all via env vars, no hardcoded secrets):
+ *   EXPO_PUBLIC_RELAY_URL  full relay WS URL, e.g. ws://192.168.1.5:8766
+ *                          or wss://my-relay.example.com (tunnel / remote)
+ *   EXPO_PUBLIC_EYES_TOKEN auth token — must match the relay's --token flag
  *
- * EyesProvider wraps the app on ALL platforms, but on web the proxy stubs
- * the request before it reaches Expo, so the web bundle never actually runs.
- * Only native (Expo Go) connects to the relay.
+ * If EXPO_PUBLIC_RELAY_URL is not set, defaults to ws://localhost:8766
+ * (relay running on the same machine; works with an Android emulator using
+ * adb reverse, or a device on the same LAN when the relay host is set).
+ *
+ * On web the WS URL is derived from window.location (same host, ws/wss),
+ * which works when the relay sits behind the same reverse proxy.
  */
 
 const ENV_RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL;
-const ENV_PUBLIC_HOST = process.env.EXPO_PUBLIC_PUBLIC_HOST;
-const TOKEN = process.env.EXPO_PUBLIC_EYES_TOKEN || 'ultron123';
-const RELAY_WS_PORT = 8766;
+const TOKEN = process.env.EXPO_PUBLIC_EYES_TOKEN || '';
 
 function resolveRelayUrl(): string {
-  if (ENV_RELAY_URL && ENV_RELAY_URL !== 'auto' && ENV_RELAY_URL.startsWith('ws')) {
+  if (ENV_RELAY_URL && ENV_RELAY_URL.startsWith('ws')) {
     return ENV_RELAY_URL;
   }
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
     const host = window.location.host;
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    return `${proto}://${host}/?XTransformPort=${RELAY_WS_PORT}`;
-  }
-  if (ENV_PUBLIC_HOST) {
-    return `wss://${ENV_PUBLIC_HOST}/?XTransformPort=${RELAY_WS_PORT}`;
+    return `${proto}://${host}`;
   }
   return 'ws://localhost:8766';
 }

@@ -1,7 +1,7 @@
 /**
  * http-server.js — agent-facing HTTP API.
  *
- * Pattern verified against Express 5.2.1 (see docs/libraries/express-API-summary.md).
+ * Pattern verified against Express 5.2.x.
  *
  * Key Express 5 specifics we use:
  *   - `app.listen(port, host, callback)` — callback receives errors (v5 breaking change)

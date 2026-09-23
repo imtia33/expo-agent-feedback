@@ -7,15 +7,16 @@
  *   the SAME API RN's Element Inspector uses. Returns a flat hierarchy array,
  *   not a deep recursive tree. No serialize issues.
  *
- * Primitives exposed to the relay:
+ * Primitives exposed to the relay (18 total — see protocol.ts):
  *   inspectAtPoint({ x, y })     → element at a screen point
  *   listVisibleElements()        → flat list of all visible elements
  *   dispatchEvent(viewTag, ...)  → fire onPress/onChangeText on a viewTag
  *   scroll(viewTag, x, y)        → scrollTo on a scrollable
  *   scrollToIndex(viewTag, n)    → scrollToIndex on a list
+ *   … plus swipe, screenshot, waitForElement, readScreen, layout, navigate,
+ *     back, assertVisible, assertText, assertEnabled, pinch, ping, diagnostics
  *
- * Reference: docs/libraries/rn-element-inspector-API.md
- *            react-native@0.86.3/src/private/devsupport/devmenu/elementinspector/
+ * Reference: react-native@0.86.3/src/private/devsupport/devmenu/elementinspector/
  */
 
 import { getRenderers, getAllFiberRoots } from './devtools-hook';

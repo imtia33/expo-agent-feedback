@@ -6,8 +6,7 @@
  * react-devtools-core's `initialize()`). We attach listeners to the
  * existing hook — we do NOT call initialize() ourselves.
  *
- * API verified against react-devtools-core@8.0.0 / RN 0.87
- * (see docs/libraries/rn-devtools-hook-API.md).
+ * API verified against react-devtools-core@8.0.0 / RN 0.87.
  *
  * Key findings from research:
  *   - `iface.walkTree(cb)` does NOT exist (removed in v4.x / RN 0.66).
@@ -112,9 +111,9 @@ export function getHookRef(): DevToolsHook | null {
  * the same API RN's own Element Inspector uses. Returns a flat hierarchy
  * array, not a deep tree. No Hermes depth issues.
  *
- * Verified against react-native@0.86.3/src/private/devsupport/devmenu/
- * elementinspector/getInspectorDataForViewAtPoint.js
- * (see docs/libraries/rn-element-inspector-API.md).
+ * Verified against react-native@0.86.3
+ * src/private/devsupport/devmenu/elementinspector/getInspectorDataForViewAtPoint.js
+ * — the same file RN's own Element Inspector ships.
  */
 export function getRenderers(): any[] {
   const hook = getHook();

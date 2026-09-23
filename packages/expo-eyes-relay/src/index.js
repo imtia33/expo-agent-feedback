@@ -19,15 +19,11 @@
  *   HTTP port publicly. The phone WS connection stays on LAN.
  *
  * Pattern verified against:
- *   - ws 8.21.3        (docs/libraries/ws-API-summary.md)
- *   - express 5.2.1   (docs/libraries/express-API-summary.md)
- *   - cloudflared      (docs/libraries/cloudflared-API-summary.md)
+ *   - ws 8.21.3 (phone-facing WebSocket server)
+ *   - express 5.2.1 (agent-facing HTTP API)
+ *   - cloudflared / ngrok / localtunnel (optional --tunnel providers)
  */
 
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
 const config = require('./config');
 const { startWsServer } = require('./ws-server');
 const { startHttpServer } = require('./http-server');
